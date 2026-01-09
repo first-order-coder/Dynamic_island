@@ -39,12 +39,28 @@ const Island = () => {
 
     const endTimeRef = useRef<number>(0);
     const startTimeRef = useRef<number>(0);
+    const lastPinToggleAt = useRef<number>(0);
 
     // Toggle Pin
     const togglePin = () => {
         const newState = !isPinned;
+        lastPinToggleAt.current = Date.now();
         setIsPinned(newState);
-        if (window.electron) window.electron.setAlwaysOnTop(newState);
+
+        if (!window.electron) return;
+
+        // Immediately ensure it is interactive during the toggle
+        window.electron.setIgnoreMouseEvents(false);
+
+        // Toggle always-on-top and taskbar behavior in main process
+        window.electron.setAlwaysOnTop(newState);
+
+        // After short delay, if pinned + collapsed + not hovering, allow click-through again
+        setTimeout(() => {
+            if (newState && !isExpanded && !isHovering.current) {
+                window.electron?.setIgnoreMouseEvents(true, { forward: true });
+            }
+        }, 300);
     };
 
     const startTimer = () => {
@@ -150,6 +166,8 @@ const Island = () => {
 
     useEffect(() => {
         const handleBlur = () => {
+            // Ignore blur right after pin toggle to prevent forced collapse
+            if (Date.now() - lastPinToggleAt.current < 500) return;
             // Respect alwaysExpanded preference
             if (isExpanded && !alwaysExpanded) setIsExpanded(false);
         };
@@ -158,12 +176,49 @@ const Island = () => {
     }, [isExpanded, alwaysExpanded]);
 
     const isHovering = useRef(false);
+    const isPinnedRef = useRef(isPinned);
+    const isExpandedRef = useRef(isExpanded);
+
+    // Manage ignoreMouseEvents based on pin state and expanded state
+    useEffect(() => {
+        if (!window.electron) return;
+
+        // When UNPINNED, never allow click-through; keep window interactive
+        if (!isPinned) {
+            window.electron.setIgnoreMouseEvents(false);
+            return;
+        }
+
+        // When PINNED, allow overlay click-through only when collapsed and not hovering
+        if (isExpanded) {
+            window.electron.setIgnoreMouseEvents(false);
+        } else if (!isHovering.current) {
+            window.electron.setIgnoreMouseEvents(true, { forward: true });
+        }
+    }, [isExpanded, isPinned]);
+
+    // Keep refs in sync
+    useEffect(() => {
+        isPinnedRef.current = isPinned;
+    }, [isPinned]);
+
+    useEffect(() => {
+        isExpandedRef.current = isExpanded;
+    }, [isExpanded]);
 
     // Set initial mouse ignore state
     useEffect(() => {
-        if (window.electron) {
+        if (!window.electron) return;
+
+        // Start in overlay mode only if pinned
+        if (isPinned) {
             window.electron.setIgnoreMouseEvents(true, { forward: true });
+        } else {
+            window.electron.setIgnoreMouseEvents(false);
         }
+
+        // run once on mount (pin toggle will manage later)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const handleMouseEnter = () => {
@@ -177,7 +232,7 @@ const Island = () => {
     const handleMouseLeave = () => {
         console.log('React: handleMouseLeave', { isDragging: isDragging.current });
         isHovering.current = false;
-        if (window.electron && !isDragging.current) {
+        if (window.electron && isPinnedRef.current && !isDragging.current && !isExpanded) {
             window.electron.setIgnoreMouseEvents(true, { forward: true });
         }
     };
@@ -203,9 +258,13 @@ const Island = () => {
         const handleMouseUp = () => {
             isDragging.current = false;
             // If we released drag and we are not hovering anymore (dragged out), 
-            // set transparency back on
+            // set transparency back on (only if pinned)
             if (!isHovering.current && window.electron) {
-                window.electron.setIgnoreMouseEvents(true, { forward: true });
+                if (isPinnedRef.current && !isExpandedRef.current) {
+                    window.electron.setIgnoreMouseEvents(true, { forward: true });
+                } else {
+                    window.electron.setIgnoreMouseEvents(false);
+                }
             }
         };
 
@@ -219,9 +278,15 @@ const Island = () => {
     }, []);
 
     const handleMouseDown = (e: React.MouseEvent) => {
-        // Don't start drag if clicking on interactive elements
+        // Don't start drag if clicking on interactive elements or no-drag zones
         const target = e.target as HTMLElement;
-        if (target.tagName === 'BUTTON' || target.tagName === 'INPUT' || target.closest('button') || target.closest('input')) {
+        if (
+            target.tagName === 'BUTTON' || 
+            target.tagName === 'INPUT' || 
+            target.closest('button') || 
+            target.closest('input') ||
+            target.closest('[data-no-drag="true"]')
+        ) {
             return;
         }
 
@@ -342,10 +407,16 @@ const Island = () => {
                             </div>
 
                             {/* Right Side: Controls */}
-                            <div className="flex items-center gap-1">
+                            <div 
+                                data-no-drag="true" 
+                                className="flex items-center gap-1"
+                            >
                                 {/* Pin Toggle */}
                                 <button
-                                    onClick={togglePin}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        togglePin();
+                                    }}
                                     title={isPinned ? "Unpin from top" : "Pin to top"}
                                     className={`p-1.5 rounded-full transition-colors cursor-pointer ${isPinned ? 'text-zinc-200 bg-white/10' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
                                         }`}
@@ -355,7 +426,10 @@ const Island = () => {
 
                                 {/* Always Expanded Toggle */}
                                 <button
-                                    onClick={() => setAlwaysExpanded(!alwaysExpanded)}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setAlwaysExpanded(!alwaysExpanded);
+                                    }}
                                     title={alwaysExpanded ? "Disable always expanded" : "Keep expanded"}
                                     className={`p-1.5 rounded-full transition-colors cursor-pointer ${alwaysExpanded ? 'text-zinc-200 bg-white/10' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
                                         }`}
@@ -368,7 +442,10 @@ const Island = () => {
 
                                 {/* Close/Collapse */}
                                 <button
-                                    onClick={() => setIsExpanded(false)}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setIsExpanded(false);
+                                    }}
                                     className="bg-zinc-900 hover:bg-zinc-800 hover:text-white rounded-full p-1.5 transition-colors cursor-pointer group"
                                 >
                                     <X size={12} className="text-zinc-500 group-hover:text-white" />

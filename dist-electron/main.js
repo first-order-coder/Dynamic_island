@@ -75,20 +75,22 @@ electron_1.app.on('activate', () => {
     }
 });
 // IPC Handlers
-electron_1.ipcMain.handle('resize-window', (event, { width, height }) => {
+electron_1.ipcMain.handle('resize-window', (_event, { width, height }) => {
     if (!mainWindow)
         return;
-    const bounds = mainWindow.getBounds();
-    const primaryDisplay = electron_1.screen.getPrimaryDisplay();
-    const { width: screenWidth } = primaryDisplay.workAreaSize;
-    // Center horizontally
-    const x = Math.round(screenWidth / 2 - width / 2);
-    mainWindow.setBounds({
-        x: x,
-        y: bounds.y, // keep current Y
-        width: Math.round(width),
-        height: Math.round(height)
-    }, true);
+    const b = mainWindow.getBounds();
+    const display = electron_1.screen.getDisplayMatching(b);
+    const { workArea } = display;
+    const nextW = Math.round(width);
+    const nextH = Math.round(height);
+    // Preserve current window center X, keep y fixed.
+    const centerX = b.x + b.width / 2;
+    let x = Math.round(centerX - nextW / 2);
+    let y = b.y;
+    // Clamp inside work area
+    x = Math.min(Math.max(x, workArea.x), workArea.x + workArea.width - nextW);
+    y = Math.min(Math.max(y, workArea.y), workArea.y + workArea.height - nextH);
+    mainWindow.setBounds({ x, y, width: nextW, height: nextH }, false);
 });
 electron_1.ipcMain.handle('move-window', (event, { deltaX, deltaY }) => {
     if (!mainWindow)
@@ -116,9 +118,29 @@ electron_1.ipcMain.handle('set-ignore-mouse-events', (event, ignore, options) =>
         return;
     mainWindow.setIgnoreMouseEvents(ignore, options);
 });
-electron_1.ipcMain.handle('set-always-on-top', (event, alwaysOnTop) => {
+electron_1.ipcMain.handle('set-always-on-top', (_event, alwaysOnTop) => {
     if (!mainWindow)
         return;
-    mainWindow.setAlwaysOnTop(alwaysOnTop);
+    const b = mainWindow.getBounds();
+    // Ensure it stays interactive during z-order changes
+    mainWindow.setIgnoreMouseEvents(false);
+    if (alwaysOnTop) {
+        // Better behavior for overlay utilities on Windows
+        mainWindow.setAlwaysOnTop(true, 'floating');
+        mainWindow.setSkipTaskbar(true); // overlay mode: keep it out of taskbar
+    }
+    else {
+        mainWindow.setAlwaysOnTop(false);
+        mainWindow.setSkipTaskbar(false); // unpinned must be recoverable
+    }
+    // Keep exact position/size
+    mainWindow.setBounds(b, false);
+    // Make sure it's still visible after unpin
+    if (!mainWindow.isVisible())
+        mainWindow.show();
+    else
+        mainWindow.showInactive(); // avoids focus stealing but keeps visible
+    // Prevent immediate "drop behind everything" feeling during toggle
+    mainWindow.moveTop();
 });
 //# sourceMappingURL=main.js.map
