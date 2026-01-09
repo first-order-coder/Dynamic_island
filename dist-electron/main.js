@@ -5,13 +5,15 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
 const path_1 = __importDefault(require("path"));
+// Disable hardware acceleration to prevent GPU crashes with transparent windows
+electron_1.app.disableHardwareAcceleration();
 let mainWindow = null;
 const createWindow = () => {
     const primaryDisplay = electron_1.screen.getPrimaryDisplay();
     const { width: screenWidth } = primaryDisplay.workAreaSize;
     // Fixed size (large enough for expanded state + padding for shadows)
-    const width = 420; // 360 + 60 padding
-    const height = 300; // 240 + 60 padding
+    const width = 500;
+    const height = 500;
     mainWindow = new electron_1.BrowserWindow({
         width: width,
         height: height,
@@ -38,12 +40,30 @@ const createWindow = () => {
     else {
         mainWindow.loadFile(path_1.default.join(__dirname, '../dist/index.html'));
     }
-    // Make the window ignore mouse events when transparent parts are clicked?
-    // For now, we want it clickable everywhere inside the pill.
-    // We might need setIgnoreMouseEvents if we have large transparent areas, 
-    // but since we resize the window to match content, it's fine.
+    // Bridge logs from renderer to terminal
+    mainWindow.webContents.on('console-message', (event, level, message) => {
+        const levels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+        console.log(`[Renderer ${levels[level] || 'LOG'}] ${message}`);
+    });
+    mainWindow.on('closed', () => {
+        mainWindow = null;
+    });
 };
-electron_1.app.on('ready', createWindow);
+const gotTheLock = electron_1.app.requestSingleInstanceLock();
+if (!gotTheLock) {
+    electron_1.app.quit();
+}
+else {
+    electron_1.app.on('second-instance', (event, commandLine, workingDirectory) => {
+        // Someone tried to run a second instance, we should focus our window.
+        if (mainWindow) {
+            if (mainWindow.isMinimized())
+                mainWindow.restore();
+            mainWindow.focus();
+        }
+    });
+    electron_1.app.on('ready', createWindow);
+}
 electron_1.app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
         electron_1.app.quit();
@@ -90,5 +110,15 @@ electron_1.ipcMain.handle('get-window-position', () => {
         return { x: 0, y: 0 };
     const bounds = mainWindow.getBounds();
     return { x: bounds.x, y: bounds.y };
+});
+electron_1.ipcMain.handle('set-ignore-mouse-events', (event, ignore, options) => {
+    if (!mainWindow)
+        return;
+    mainWindow.setIgnoreMouseEvents(ignore, options);
+});
+electron_1.ipcMain.handle('set-always-on-top', (event, alwaysOnTop) => {
+    if (!mainWindow)
+        return;
+    mainWindow.setAlwaysOnTop(alwaysOnTop);
 });
 //# sourceMappingURL=main.js.map

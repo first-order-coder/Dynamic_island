@@ -1,6 +1,9 @@
 import { app, BrowserWindow, ipcMain, screen } from 'electron';
 import path from 'path';
 
+// Disable hardware acceleration to prevent GPU crashes with transparent windows
+app.disableHardwareAcceleration();
+
 let mainWindow: BrowserWindow | null = null;
 
 const createWindow = () => {
@@ -8,8 +11,8 @@ const createWindow = () => {
     const { width: screenWidth } = primaryDisplay.workAreaSize;
 
     // Fixed size (large enough for expanded state + padding for shadows)
-    const width = 420; // 360 + 60 padding
-    const height = 300; // 240 + 60 padding
+    const width = 500;
+    const height = 500;
 
     mainWindow = new BrowserWindow({
         width: width,
@@ -39,13 +42,32 @@ const createWindow = () => {
         mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
     }
 
-    // Make the window ignore mouse events when transparent parts are clicked?
-    // For now, we want it clickable everywhere inside the pill.
-    // We might need setIgnoreMouseEvents if we have large transparent areas, 
-    // but since we resize the window to match content, it's fine.
+    // Bridge logs from renderer to terminal
+    mainWindow.webContents.on('console-message', (event, level, message) => {
+        const levels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+        console.log(`[Renderer ${levels[level] || 'LOG'}] ${message}`);
+    });
+
+    mainWindow.on('closed', () => {
+        mainWindow = null;
+    });
 };
 
-app.on('ready', createWindow);
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+    app.quit();
+} else {
+    app.on('second-instance', (event, commandLine, workingDirectory) => {
+        // Someone tried to run a second instance, we should focus our window.
+        if (mainWindow) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.focus();
+        }
+    });
+
+    app.on('ready', createWindow);
+}
 
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
@@ -100,4 +122,14 @@ ipcMain.handle('get-window-position', () => {
     if (!mainWindow) return { x: 0, y: 0 };
     const bounds = mainWindow.getBounds();
     return { x: bounds.x, y: bounds.y };
+});
+
+ipcMain.handle('set-ignore-mouse-events', (event, ignore, options) => {
+    if (!mainWindow) return;
+    mainWindow.setIgnoreMouseEvents(ignore, options);
+});
+
+ipcMain.handle('set-always-on-top', (event, alwaysOnTop) => {
+    if (!mainWindow) return;
+    mainWindow.setAlwaysOnTop(alwaysOnTop);
 });
