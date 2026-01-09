@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
-contextBridge.exposeInMainWorld('electron', {
+const exposedObject = {
     resizeWindow: (width: number, height: number) => ipcRenderer.invoke('resize-window', { width, height }),
     moveWindow: (deltaX: number, deltaY: number) => ipcRenderer.invoke('move-window', { deltaX, deltaY }),
     setIgnoreMouseEvents: (ignore: boolean, options?: { forward?: boolean }) => ipcRenderer.invoke('set-ignore-mouse-events', ignore, options),
@@ -25,4 +25,11 @@ contextBridge.exposeInMainWorld('electron', {
     
     overlaySetInteractiveRect: (rect: { x: number; y: number; width: number; height: number }) =>
         ipcRenderer.invoke('overlay-set-interactive-rect', rect),
-});
+    
+    // Recenter window
+    recenterWindow: () => ipcRenderer.invoke('recenter-window'),
+};
+
+console.log('[preload] electron API keys:', Object.keys(exposedObject));
+
+contextBridge.exposeInMainWorld('electron', exposedObject);

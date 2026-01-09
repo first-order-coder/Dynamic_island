@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Play, Pause, RefreshCw, X, Timer, Clock, Pin, PinOff, Maximize2, Minimize2 } from 'lucide-react';
+import { Play, Pause, RefreshCw, Timer, Clock, Pin, PinOff, Maximize2, Minimize2, LocateFixed } from 'lucide-react';
 import { springApple, viewFade, easeApple, pressTap, hoverLift, fadeMed } from './motion';
 
 // DEBUG mode - set to false to remove red window outline
@@ -31,7 +31,7 @@ const ModeBadgeIcon = ({ mode, state, allowGlow = false }: { mode: TimerMode; st
 
     return (
         <motion.div
-            className={`flex items-center justify-center w-5 h-5 rounded-full border transition-[box-shadow,background-color,border-color,color] duration-200 ${ringClass} ${colorClass}`}
+            className={`flex items-center justify-center w-[22px] h-[22px] rounded-full border transition-[box-shadow,background-color,border-color,color] duration-200 ${ringClass} ${colorClass}`}
             animate={{
                 scale: isRunning ? [1, 1.06, 1] : 1,
                 opacity: isRunning ? [0.95, 1, 0.95] : 1,
@@ -47,7 +47,7 @@ const ModeBadgeIcon = ({ mode, state, allowGlow = false }: { mode: TimerMode; st
                 opacity: { duration: 1.4, repeat: Infinity, ease: easeApple }
             } : fadeMed}
         >
-            <Icon size={12} strokeWidth={2.5} />
+            <Icon size={13} strokeWidth={2.5} />
         </motion.div>
     );
 };
@@ -56,9 +56,10 @@ const ModeBadgeIcon = ({ mode, state, allowGlow = false }: { mode: TimerMode; st
 const ISLAND_W_EXPANDED = 400;
 const ISLAND_H_EXPANDED = 380;
 
-const ISLAND_H_COLLAPSED = 34;
-const ISLAND_W_IDLE = 150;
-const ISLAND_W_ACTIVE = 140; // running/paused/finished
+const ISLAND_H_COLLAPSED = 44;              // increased from 34 for premium spacing
+const ISLAND_W_IDLE = 200;                  // increased from 150
+const ISLAND_W_ACTIVE = 190;                // increased from 140 (running/paused/finished)
+const COLLAPSED_RADIUS = 24;                // increased from 20 for smoother corners
 
 // IMPORTANT: minimal padding - no shadow area needed
 const PAD_COLLAPSED = 0;   // no padding in collapsed mode (no shadow)
@@ -88,10 +89,25 @@ const Island = () => {
 
     const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-    // Drag state
+    // Drag state - pointer events with capture
     const isDragging = useRef(false);
-    const dragStart = useRef({ x: 0, y: 0 });
+    const dragPointerId = useRef<number | null>(null);
+    const lastScreenPos = useRef({ x: 0, y: 0 });
+    const totalDrag = useRef({ x: 0, y: 0 });
     const hasMoved = useRef(false);
+
+    // rAF throttling for smooth drag
+    const pendingDelta = useRef({ x: 0, y: 0 });
+    const rafId = useRef<number | null>(null);
+
+    const flushMove = () => {
+        rafId.current = null;
+        const { x, y } = pendingDelta.current;
+        pendingDelta.current = { x: 0, y: 0 };
+        if (window.electron && (x !== 0 || y !== 0)) {
+            window.electron.moveWindow(x, y);
+        }
+    };
 
     const endTimeRef = useRef<number>(0);
     const startTimeRef = useRef<number>(0);
@@ -353,56 +369,83 @@ const Island = () => {
         console.log('React: handleMouseLeave', { isDragging: isDragging.current });
         isHovering.current = false;
         // Main process handles click-through automatically via polling
+        // Note: pointer capture handles drag even if cursor leaves, so we don't need to check dragging here
     };
 
-    // Custom drag implementation
-    useEffect(() => {
-        const handleMouseMove = (e: MouseEvent) => {
-            if (!isDragging.current) return;
+    // Helper to check if target should not trigger drag
+    const isNoDragTarget = (target: EventTarget | null): boolean => {
+        if (!target) return false;
+        const element = target as HTMLElement;
+        return (
+            element.tagName === 'BUTTON' ||
+            element.tagName === 'INPUT' ||
+            !!element.closest('button') ||
+            !!element.closest('input') ||
+            !!element.closest('[data-no-drag="true"]')
+        );
+    };
 
-            const deltaX = e.screenX - dragStart.current.x;
-            const deltaY = e.screenY - dragStart.current.y;
-
-            if (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3) {
-                hasMoved.current = true;
-            }
-
-            if (hasMoved.current && window.electron) {
-                window.electron.moveWindow(deltaX, deltaY);
-                dragStart.current = { x: e.screenX, y: e.screenY };
-            }
-        };
-
-        const handleMouseUp = () => {
-            isDragging.current = false;
-            // Main process handles click-through automatically via polling
-        };
-
-        window.addEventListener('mousemove', handleMouseMove);
-        window.addEventListener('mouseup', handleMouseUp);
-
-        return () => {
-            window.removeEventListener('mousemove', handleMouseMove);
-            window.removeEventListener('mouseup', handleMouseUp);
-        };
-    }, []);
-
-    const handleMouseDown = (e: React.MouseEvent) => {
-        // Don't start drag if clicking on interactive elements or no-drag zones
-        const target = e.target as HTMLElement;
-        if (
-            target.tagName === 'BUTTON' || 
-            target.tagName === 'INPUT' || 
-            target.closest('button') || 
-            target.closest('input') ||
-            target.closest('[data-no-drag="true"]')
-        ) {
-            return;
-        }
+    // Pointer-based drag handlers for smooth, native-feeling drag
+    const onPointerDown = (e: React.PointerEvent) => {
+        if (isNoDragTarget(e.target)) return;
 
         isDragging.current = true;
         hasMoved.current = false;
-        dragStart.current = { x: e.screenX, y: e.screenY };
+        totalDrag.current = { x: 0, y: 0 };
+
+        dragPointerId.current = e.pointerId;
+        lastScreenPos.current = { x: e.screenX, y: e.screenY };
+
+        // Capture pointer so drag continues even if cursor leaves window
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+
+        // Force interactivity during drag - critical for smooth dragging
+        window.electron?.setIgnoreMouseEvents(false);
+    };
+
+    const onPointerMove = (e: React.PointerEvent) => {
+        if (!isDragging.current) return;
+        if (dragPointerId.current !== e.pointerId) return;
+
+        const dx = e.screenX - lastScreenPos.current.x;
+        const dy = e.screenY - lastScreenPos.current.y;
+
+        lastScreenPos.current = { x: e.screenX, y: e.screenY };
+
+        // Track total movement for click detection (1px threshold)
+        totalDrag.current.x += dx;
+        totalDrag.current.y += dy;
+        if (Math.abs(totalDrag.current.x) > 1 || Math.abs(totalDrag.current.y) > 1) {
+            hasMoved.current = true;
+        }
+
+        // Accumulate delta and schedule rAF flush for smooth 60fps updates
+        pendingDelta.current.x += dx;
+        pendingDelta.current.y += dy;
+        if (!rafId.current) {
+            rafId.current = requestAnimationFrame(flushMove);
+        }
+    };
+
+    const endPointerDrag = () => {
+        // Release capture if still held
+        if (dragPointerId.current !== null && isDragging.current) {
+            // Note: release is automatic on pointer up/cancel, but we reset the ref
+            dragPointerId.current = null;
+        }
+
+        isDragging.current = false;
+
+        // Flush any pending move immediately
+        if (rafId.current) {
+            cancelAnimationFrame(rafId.current);
+            rafId.current = null;
+            flushMove();
+        }
+
+        // Restore click-through rules AFTER drag ends
+        // Main process polling will handle click-through automatically based on state
+        // We don't need to manually set ignoreMouseEvents here since main process handles it
     };
 
     const handleClick = () => {
@@ -411,6 +454,34 @@ const Island = () => {
             setIsExpanded(true);
             // Force focus so the next outside click triggers a real blur event
             window.electron?.focusWindow?.();
+        }
+    };
+
+    const handleRecenter = async (e: React.MouseEvent) => {
+        e.stopPropagation();
+        console.log('[recenter] clicked');
+
+        if (!window.electron) {
+            console.error('[recenter] window.electron missing');
+            return;
+        }
+        if (typeof (window.electron as any).recenterWindow !== 'function') {
+            console.error('[recenter] recenterWindow API missing on preload', window.electron);
+            return;
+        }
+
+        try {
+            // Ensure clickable
+            await window.electron.setIgnoreMouseEvents(false);
+            
+            // Call recenter
+            const result = await (window.electron as any).recenterWindow();
+            console.log('[recenter] IPC result:', result);
+            
+            // Optional: focus window for reliability
+            await window.electron.focusWindow?.();
+        } catch (err) {
+            console.error('[recenter] IPC failed:', err);
         }
     };
 
@@ -447,10 +518,13 @@ const Island = () => {
                 animate={{
                     width: islandW,
                     height: islandH,
-                    borderRadius: isExpanded ? 48 : 20
+                    borderRadius: isExpanded ? 48 : COLLAPSED_RADIUS
                 }}
                 transition={springApple}
-                onMouseDown={handleMouseDown}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={endPointerDrag}
+                onPointerCancel={endPointerDrag}
                 onClick={handleClick}
             >
             {/* Background Base */}
@@ -526,19 +600,17 @@ const Island = () => {
                                 {/* Divider */}
                                 <div className="w-px h-3 bg-white/5" />
 
-                                {/* Close/Collapse */}
+                                {/* Recenter */}
                                 <motion.button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        setIsExpanded(false);
-                                    }}
-                                    className="bg-zinc-900 hover:bg-zinc-800 hover:text-white rounded-full flex items-center justify-center transition-colors cursor-pointer group"
+                                    onClick={handleRecenter}
+                                    title="Recenter"
+                                    className="bg-zinc-900 hover:bg-zinc-800 hover:text-white rounded-full flex items-center justify-center transition-colors cursor-pointer group relative z-50 pointer-events-auto"
                                     style={{ width: `${BTN_SIZE}px`, height: `${BTN_SIZE}px` }}
                                     whileHover={hoverLift}
                                     whileTap={pressTap}
                                     transition={{ duration: 0.12, ease: easeApple }}
                                 >
-                                    <X size={14} className="text-zinc-500 group-hover:text-white" />
+                                    <LocateFixed size={14} className="text-zinc-500 group-hover:text-white" />
                                 </motion.button>
                             </div>
                         </div>
@@ -712,7 +784,7 @@ const Island = () => {
                 ) : (
                     <motion.div
                         key="collapsed"
-                        className="absolute inset-0 flex items-center justify-between px-4 pointer-events-auto"
+                        className="absolute inset-0 flex items-center justify-between px-5 pointer-events-auto"
                         variants={viewFade}
                         initial="initial"
                         animate="animate"
@@ -727,10 +799,10 @@ const Island = () => {
                         )}
                         {(state === 'running' || state === 'paused' || state === 'finished') && (
                             <>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-3">
                                     <ModeBadgeIcon mode={timerMode} state={state} allowGlow={false} />
                                     <motion.span 
-                                        className={`font-mono font-bold tracking-tighter text-sm transition-colors duration-200 ${state === 'running' ? 'text-cyan-400' :
+                                        className={`font-mono font-bold tracking-tighter text-base tabular-nums transition-colors duration-200 ${state === 'running' ? 'text-cyan-400' :
                                             state === 'paused' ? 'text-yellow-400' :
                                                 state === 'finished' ? 'text-red-500' : 'text-zinc-400'
                                             }`}
@@ -745,14 +817,14 @@ const Island = () => {
                                         else if (state === 'paused') startTimer();
                                         else if (state === 'finished') stopTimer();
                                     }}
-                                    className="p-1.5 rounded-full hover:bg-white/10 text-zinc-500 hover:text-white transition-colors cursor-pointer"
+                                    className="p-2 rounded-full hover:bg-white/10 text-zinc-500 hover:text-white transition-colors cursor-pointer"
                                     whileHover={hoverLift}
                                     whileTap={pressTap}
                                     transition={{ duration: 0.12, ease: easeApple }}
                                 >
-                                    {state === 'running' ? <Pause size={13} fill="currentColor" /> :
-                                        state === 'finished' ? <RefreshCw size={13} /> :
-                                            <Play size={13} fill="currentColor" className="ml-0.5" />}
+                                    {state === 'running' ? <Pause size={14} fill="currentColor" /> :
+                                        state === 'finished' ? <RefreshCw size={14} /> :
+                                            <Play size={14} fill="currentColor" className="ml-0.5" />}
                                 </motion.button>
                             </>
                         )}

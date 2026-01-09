@@ -230,7 +230,11 @@ ipcMain.handle('move-window', (event, { deltaX, deltaY }) => {
     newX = Math.max(workArea.x - bounds.width + minVisible, Math.min(newX, workArea.x + workArea.width - minVisible));
     newY = Math.max(workArea.y, Math.min(newY, workArea.y + workArea.height - minVisible));
 
-    mainWindow.setPosition(Math.round(newX), Math.round(newY));
+    // Use setBounds instead of setPosition for smoother movement on some systems
+    mainWindow.setBounds(
+        { x: Math.round(newX), y: Math.round(newY), width: bounds.width, height: bounds.height },
+        false
+    );
 });
 
 ipcMain.handle('get-window-position', () => {
@@ -313,4 +317,38 @@ ipcMain.handle('overlay-set-interactive-rect', (_event, rect: { x: number; y: nu
         height: Math.round(rect.height),
     };
     startPoll();
+});
+
+ipcMain.handle('recenter-window', () => {
+    if (!mainWindow) return { ok: false, reason: 'no-window' };
+
+    const b = mainWindow.getBounds();
+    const display = screen.getDisplayMatching(b);
+    const { workArea } = display;
+
+    const TOP_MARGIN = 12;
+
+    // top-center of the work area, preserve current size
+    let x = Math.round(workArea.x + (workArea.width - b.width) / 2);
+    let y = Math.round(workArea.y + TOP_MARGIN);
+
+    // clamp (just in case)
+    x = Math.min(Math.max(x, workArea.x), workArea.x + workArea.width - b.width);
+    y = Math.min(Math.max(y, workArea.y), workArea.y + workArea.height - b.height);
+
+    console.log('[ipc recenter-window] from', b, 'to', { x, y }, 'workArea', workArea);
+
+    // Force interactivity while moving (prevents click-through controllers from interfering)
+    mainWindow.setIgnoreMouseEvents(false);
+    setIgnoring(false); // Also update selective click-through state
+
+    // Move window (use setBounds for reliability)
+    mainWindow.setBounds({ x, y, width: b.width, height: b.height }, false);
+
+    // Make sure it is visible
+    mainWindow.showInactive();
+
+    // Return new bounds to renderer for confirmation
+    const nb = mainWindow.getBounds();
+    return { ok: true, bounds: nb };
 });
