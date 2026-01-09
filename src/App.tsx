@@ -40,27 +40,38 @@ const Island = () => {
     const endTimeRef = useRef<number>(0);
     const startTimeRef = useRef<number>(0);
     const lastPinToggleAt = useRef<number>(0);
+    const PIN_COOLDOWN_MS = 1200; // Increased to ensure no race conditions
 
     // Toggle Pin
     const togglePin = () => {
         const newState = !isPinned;
+        // Set timestamp FIRST before state update to prevent race conditions
         lastPinToggleAt.current = Date.now();
         setIsPinned(newState);
 
         if (!window.electron) return;
 
-        // Immediately ensure it is interactive during the toggle
+        // Always be interactive immediately after toggling pin.
+        // Force this multiple times to ensure it sticks
         window.electron.setIgnoreMouseEvents(false);
-
-        // Toggle always-on-top and taskbar behavior in main process
+        
+        // Toggle always-on-top in main process (hardened handler preserves visibility)
         window.electron.setAlwaysOnTop(newState);
-
-        // After short delay, if pinned + collapsed + not hovering, allow click-through again
+        
+        // Force interactivity again after a tiny delay to override any race conditions
         setTimeout(() => {
+            window.electron?.setIgnoreMouseEvents(false);
+        }, 10);
+
+        // After cooldown, only allow click-through again if pinned + collapsed + not hovering.
+        setTimeout(() => {
+            const coolingDown = Date.now() - lastPinToggleAt.current < PIN_COOLDOWN_MS;
+            if (coolingDown) return;
+
             if (newState && !isExpanded && !isHovering.current) {
                 window.electron?.setIgnoreMouseEvents(true, { forward: true });
             }
-        }, 300);
+        }, PIN_COOLDOWN_MS + 50); // Add small buffer to ensure cooldown passed
     };
 
     const startTimer = () => {
@@ -166,8 +177,8 @@ const Island = () => {
 
     useEffect(() => {
         const handleBlur = () => {
-            // Ignore blur right after pin toggle to prevent forced collapse
-            if (Date.now() - lastPinToggleAt.current < 500) return;
+            // Ignore blur during cooldown to prevent forced collapse
+            if (Date.now() - lastPinToggleAt.current < PIN_COOLDOWN_MS) return;
             // Respect alwaysExpanded preference
             if (isExpanded && !alwaysExpanded) setIsExpanded(false);
         };
@@ -183,16 +194,32 @@ const Island = () => {
     useEffect(() => {
         if (!window.electron) return;
 
-        // When UNPINNED, never allow click-through; keep window interactive
+        const coolingDown = Date.now() - lastPinToggleAt.current < PIN_COOLDOWN_MS;
+
+        // While cooling down, always keep interactive.
+        if (coolingDown) {
+            window.electron.setIgnoreMouseEvents(false);
+            return;
+        }
+
+        // If expanded: always interactive.
+        if (isExpanded) {
+            window.electron.setIgnoreMouseEvents(false);
+            return;
+        }
+
+        // If NOT pinned: never click-through (avoid "lost" window).
         if (!isPinned) {
             window.electron.setIgnoreMouseEvents(false);
             return;
         }
 
-        // When PINNED, allow overlay click-through only when collapsed and not hovering
-        if (isExpanded) {
+        // Pinned + collapsed: allow click-through only when not hovering.
+        // Double-check cooldown here too as a failsafe
+        const stillCoolingDown = Date.now() - lastPinToggleAt.current < PIN_COOLDOWN_MS;
+        if (stillCoolingDown || isHovering.current) {
             window.electron.setIgnoreMouseEvents(false);
-        } else if (!isHovering.current) {
+        } else {
             window.electron.setIgnoreMouseEvents(true, { forward: true });
         }
     }, [isExpanded, isPinned]);
@@ -225,14 +252,22 @@ const Island = () => {
         console.log('React: handleMouseEnter');
         isHovering.current = true;
         if (window.electron) {
+            // Force interactivity immediately and repeatedly to ensure it sticks
             window.electron.setIgnoreMouseEvents(false);
+            // Force it again after a tiny delay to override any race conditions
+            setTimeout(() => {
+                if (isHovering.current && window.electron) {
+                    window.electron.setIgnoreMouseEvents(false);
+                }
+            }, 10);
         }
     };
 
     const handleMouseLeave = () => {
         console.log('React: handleMouseLeave', { isDragging: isDragging.current });
         isHovering.current = false;
-        if (window.electron && isPinnedRef.current && !isDragging.current && !isExpanded) {
+        const coolingDown = Date.now() - lastPinToggleAt.current < PIN_COOLDOWN_MS;
+        if (window.electron && isPinnedRef.current && !coolingDown && !isDragging.current && !isExpandedRef.current) {
             window.electron.setIgnoreMouseEvents(true, { forward: true });
         }
     };
@@ -258,9 +293,10 @@ const Island = () => {
         const handleMouseUp = () => {
             isDragging.current = false;
             // If we released drag and we are not hovering anymore (dragged out), 
-            // set transparency back on (only if pinned)
+            // set transparency back on (only if pinned and not cooling down)
             if (!isHovering.current && window.electron) {
-                if (isPinnedRef.current && !isExpandedRef.current) {
+                const coolingDown = Date.now() - lastPinToggleAt.current < PIN_COOLDOWN_MS;
+                if (isPinnedRef.current && !coolingDown && !isExpandedRef.current) {
                     window.electron.setIgnoreMouseEvents(true, { forward: true });
                 } else {
                     window.electron.setIgnoreMouseEvents(false);

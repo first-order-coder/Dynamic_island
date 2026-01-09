@@ -8,6 +8,47 @@ const path_1 = __importDefault(require("path"));
 // Disable hardware acceleration to prevent GPU crashes with transparent windows
 electron_1.app.disableHardwareAcceleration();
 let mainWindow = null;
+// Click-through failsafe: poll cursor position to auto-enable interactivity
+let ignoreMouse = false;
+let hoverPollTimer = null;
+function pointInRect(p, b) {
+    return p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height;
+}
+function startHoverPoll() {
+    // Stop any existing poll first to avoid duplicates
+    stopHoverPoll();
+    if (!mainWindow)
+        return;
+    hoverPollTimer = setInterval(() => {
+        if (!mainWindow) {
+            stopHoverPoll();
+            return;
+        }
+        // If not currently click-through, stop polling.
+        if (!ignoreMouse) {
+            stopHoverPoll();
+            return;
+        }
+        const cursor = electron_1.screen.getCursorScreenPoint();
+        const bounds = mainWindow.getBounds();
+        // If cursor is over the window, force interactivity back on immediately
+        if (pointInRect(cursor, bounds)) {
+            ignoreMouse = false;
+            mainWindow.setIgnoreMouseEvents(false);
+            // Keep it visible
+            if (!mainWindow.isVisible())
+                mainWindow.show();
+            // Stop polling since we're now interactive
+            stopHoverPoll();
+        }
+    }, 50); // 20Hz is enough; low overhead
+}
+function stopHoverPoll() {
+    if (hoverPollTimer) {
+        clearInterval(hoverPollTimer);
+        hoverPollTimer = null;
+    }
+}
 const createWindow = () => {
     const primaryDisplay = electron_1.screen.getPrimaryDisplay();
     const { width: screenWidth } = primaryDisplay.workAreaSize;
@@ -46,6 +87,7 @@ const createWindow = () => {
         console.log(`[Renderer ${levels[level] || 'LOG'}] ${message}`);
     });
     mainWindow.on('closed', () => {
+        stopHoverPoll();
         mainWindow = null;
     });
 };
@@ -113,34 +155,48 @@ electron_1.ipcMain.handle('get-window-position', () => {
     const bounds = mainWindow.getBounds();
     return { x: bounds.x, y: bounds.y };
 });
-electron_1.ipcMain.handle('set-ignore-mouse-events', (event, ignore, options) => {
+electron_1.ipcMain.handle('set-ignore-mouse-events', (_event, ignore, options) => {
     if (!mainWindow)
         return;
+    ignoreMouse = ignore;
     mainWindow.setIgnoreMouseEvents(ignore, options);
+    if (ignore) {
+        startHoverPoll();
+    }
+    else {
+        stopHoverPoll();
+    }
 });
 electron_1.ipcMain.handle('set-always-on-top', (_event, alwaysOnTop) => {
     if (!mainWindow)
         return;
     const b = mainWindow.getBounds();
-    // Ensure it stays interactive during z-order changes
+    // Force it to be interactive during z-order changes - CRITICAL
+    ignoreMouse = false;
     mainWindow.setIgnoreMouseEvents(false);
+    stopHoverPoll();
     if (alwaysOnTop) {
-        // Better behavior for overlay utilities on Windows
         mainWindow.setAlwaysOnTop(true, 'floating');
-        mainWindow.setSkipTaskbar(true); // overlay mode: keep it out of taskbar
+        mainWindow.setSkipTaskbar(true);
     }
     else {
         mainWindow.setAlwaysOnTop(false);
-        mainWindow.setSkipTaskbar(false); // unpinned must be recoverable
+        mainWindow.setSkipTaskbar(false);
     }
-    // Keep exact position/size
+    // Preserve exact bounds; no jumping
     mainWindow.setBounds(b, false);
-    // Make sure it's still visible after unpin
+    // Keep visible (avoid "disappear")
     if (!mainWindow.isVisible())
         mainWindow.show();
     else
-        mainWindow.showInactive(); // avoids focus stealing but keeps visible
-    // Prevent immediate "drop behind everything" feeling during toggle
-    mainWindow.moveTop();
+        mainWindow.showInactive();
+    // Double-check interactivity after z-order change - sometimes it gets lost
+    setTimeout(() => {
+        if (mainWindow && ignoreMouse) {
+            ignoreMouse = false;
+            mainWindow.setIgnoreMouseEvents(false);
+            stopHoverPoll();
+        }
+    }, 50);
 });
 //# sourceMappingURL=main.js.map
