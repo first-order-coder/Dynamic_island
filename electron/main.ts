@@ -56,17 +56,17 @@ function stopHoverPoll() {
 
 const createWindow = () => {
     const primaryDisplay = screen.getPrimaryDisplay();
-    const { width: screenWidth } = primaryDisplay.workAreaSize;
+    const { workArea } = primaryDisplay;
 
-    // Fixed size (large enough for expanded state + padding for shadows)
-    const width = 500;
-    const height = 500;
+    // Start with small collapsed size + minimal padding
+    const COLLAPSED_W = 190;
+    const COLLAPSED_H = 60;
 
     mainWindow = new BrowserWindow({
-        width: width,
-        height: height,
-        x: Math.round(screenWidth / 2 - width / 2),
-        y: 0, // Top of screen
+        width: COLLAPSED_W,
+        height: COLLAPSED_H,
+        x: Math.round(workArea.x + workArea.width / 2 - COLLAPSED_W / 2),
+        y: workArea.y + 8,
         frame: false,
         transparent: true,
         alwaysOnTop: true,
@@ -94,6 +94,15 @@ const createWindow = () => {
     mainWindow.webContents.on('console-message', (event, level, message) => {
         const levels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
         console.log(`[Renderer ${levels[level] || 'LOG'}] ${message}`);
+    });
+
+    // Real BrowserWindow blur/focus events - source of truth for collapse-on-outside-click
+    mainWindow.on('blur', () => {
+        mainWindow?.webContents.send('overlay-window-blur');
+    });
+
+    mainWindow.on('focus', () => {
+        mainWindow?.webContents.send('overlay-window-focus');
     });
 
     mainWindow.on('closed', () => {
@@ -133,6 +142,7 @@ app.on('activate', () => {
 // IPC Handlers
 ipcMain.handle('resize-window', (_event, { width, height }) => {
     if (!mainWindow) return;
+
     const b = mainWindow.getBounds();
     const display = screen.getDisplayMatching(b);
     const { workArea } = display;
@@ -140,12 +150,12 @@ ipcMain.handle('resize-window', (_event, { width, height }) => {
     const nextW = Math.round(width);
     const nextH = Math.round(height);
 
-    // Preserve current window center X, keep y fixed.
+    // Preserve the current center X so resizing feels stable even after dragging
     const centerX = b.x + b.width / 2;
     let x = Math.round(centerX - nextW / 2);
     let y = b.y;
 
-    // Clamp inside work area
+    // Clamp window inside work area
     x = Math.min(Math.max(x, workArea.x), workArea.x + workArea.width - nextW);
     y = Math.min(Math.max(y, workArea.y), workArea.y + workArea.height - nextH);
 
@@ -195,7 +205,7 @@ ipcMain.handle('set-always-on-top', (_event, alwaysOnTop: boolean) => {
 
     const b = mainWindow.getBounds();
 
-    // Force it to be interactive during z-order changes - CRITICAL
+    // Ensure interactive during the transition
     ignoreMouse = false;
     mainWindow.setIgnoreMouseEvents(false);
     stopHoverPoll();
@@ -208,19 +218,17 @@ ipcMain.handle('set-always-on-top', (_event, alwaysOnTop: boolean) => {
         mainWindow.setSkipTaskbar(false);
     }
 
-    // Preserve exact bounds; no jumping
+    // Preserve exact position and size
     mainWindow.setBounds(b, false);
 
-    // Keep visible (avoid "disappear")
-    if (!mainWindow.isVisible()) mainWindow.show();
-    else mainWindow.showInactive();
-    
-    // Double-check interactivity after z-order change - sometimes it gets lost
-    setTimeout(() => {
-        if (mainWindow && ignoreMouse) {
-            ignoreMouse = false;
-            mainWindow.setIgnoreMouseEvents(false);
-            stopHoverPoll();
-        }
-    }, 50);
+    // Keep visible
+    mainWindow.show();
+    mainWindow.moveTop();
+});
+
+ipcMain.handle('focus-window', () => {
+    if (!mainWindow) return;
+    mainWindow.setIgnoreMouseEvents(false); // must be interactive to focus properly
+    mainWindow.show();
+    mainWindow.focus();
 });

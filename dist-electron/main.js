@@ -52,9 +52,11 @@ function stopHoverPoll() {
 const createWindow = () => {
     const primaryDisplay = electron_1.screen.getPrimaryDisplay();
     const { width: screenWidth } = primaryDisplay.workAreaSize;
-    // Fixed size (large enough for expanded state + padding for shadows)
-    const width = 500;
-    const height = 500;
+    // Start with collapsed size + minimal padding (will be resized by renderer)
+    // Collapsed: ~150w x 34h, Expanded: ~400w x 380h
+    // Initial: collapsed idle size + padding
+    const width = 150 + 32; // collapsed width + padding
+    const height = 34 + 32; // collapsed height + padding
     mainWindow = new electron_1.BrowserWindow({
         width: width,
         height: height,
@@ -85,6 +87,13 @@ const createWindow = () => {
     mainWindow.webContents.on('console-message', (event, level, message) => {
         const levels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
         console.log(`[Renderer ${levels[level] || 'LOG'}] ${message}`);
+    });
+    // Real BrowserWindow blur/focus events - source of truth for collapse-on-outside-click
+    mainWindow.on('blur', () => {
+        mainWindow?.webContents.send('overlay-window-blur');
+    });
+    mainWindow.on('focus', () => {
+        mainWindow?.webContents.send('overlay-window-focus');
     });
     mainWindow.on('closed', () => {
         stopHoverPoll();
@@ -126,12 +135,14 @@ electron_1.ipcMain.handle('resize-window', (_event, { width, height }) => {
     const nextW = Math.round(width);
     const nextH = Math.round(height);
     // Preserve current window center X, keep y fixed.
+    // This ensures stable resizing without jumping back to center
     const centerX = b.x + b.width / 2;
     let x = Math.round(centerX - nextW / 2);
     let y = b.y;
-    // Clamp inside work area
-    x = Math.min(Math.max(x, workArea.x), workArea.x + workArea.width - nextW);
-    y = Math.min(Math.max(y, workArea.y), workArea.y + workArea.height - nextH);
+    // Clamp inside work area (keep at least a small portion visible)
+    const minVisible = 20;
+    x = Math.max(workArea.x - nextW + minVisible, Math.min(x, workArea.x + workArea.width - minVisible));
+    y = Math.max(workArea.y, Math.min(y, workArea.y + workArea.height - minVisible));
     mainWindow.setBounds({ x, y, width: nextW, height: nextH }, false);
 });
 electron_1.ipcMain.handle('move-window', (event, { deltaX, deltaY }) => {
@@ -171,7 +182,7 @@ electron_1.ipcMain.handle('set-always-on-top', (_event, alwaysOnTop) => {
     if (!mainWindow)
         return;
     const b = mainWindow.getBounds();
-    // Force it to be interactive during z-order changes - CRITICAL
+    // Ensure interactive during the transition
     ignoreMouse = false;
     mainWindow.setIgnoreMouseEvents(false);
     stopHoverPoll();
@@ -183,20 +194,17 @@ electron_1.ipcMain.handle('set-always-on-top', (_event, alwaysOnTop) => {
         mainWindow.setAlwaysOnTop(false);
         mainWindow.setSkipTaskbar(false);
     }
-    // Preserve exact bounds; no jumping
+    // Preserve exact position and size
     mainWindow.setBounds(b, false);
-    // Keep visible (avoid "disappear")
-    if (!mainWindow.isVisible())
-        mainWindow.show();
-    else
-        mainWindow.showInactive();
-    // Double-check interactivity after z-order change - sometimes it gets lost
-    setTimeout(() => {
-        if (mainWindow && ignoreMouse) {
-            ignoreMouse = false;
-            mainWindow.setIgnoreMouseEvents(false);
-            stopHoverPoll();
-        }
-    }, 50);
+    // Keep visible
+    mainWindow.show();
+    mainWindow.moveTop();
+});
+electron_1.ipcMain.handle('focus-window', () => {
+    if (!mainWindow)
+        return;
+    mainWindow.setIgnoreMouseEvents(false); // must be interactive to focus properly
+    mainWindow.show();
+    mainWindow.focus();
 });
 //# sourceMappingURL=main.js.map
