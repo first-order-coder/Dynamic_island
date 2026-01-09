@@ -18,4 +18,11 @@ contextBridge.exposeInMainWorld('electron', {
         ipcRenderer.removeAllListeners('overlay-window-focus');
         ipcRenderer.on('overlay-window-focus', cb);
     },
+    
+    // Selective click-through control
+    overlaySetMode: (expanded: boolean, pinned: boolean) =>
+        ipcRenderer.invoke('overlay-set-mode', { expanded, pinned }),
+    
+    overlaySetInteractiveRect: (rect: { x: number; y: number; width: number; height: number }) =>
+        ipcRenderer.invoke('overlay-set-interactive-rect', rect),
 });

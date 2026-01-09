@@ -1,27 +1,15 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Play, Pause, RefreshCw, X, Timer, Clock, Pin, PinOff, Maximize2, Minimize2 } from 'lucide-react';
 import { springApple, viewFade, easeApple, pressTap, hoverLift, fadeMed } from './motion';
 
-// Extend window type for Electron API
-declare global {
-    interface Window {
-        electron?: {
-            resizeWindow: (width: number, height: number) => Promise<void>;
-            moveWindow: (deltaX: number, deltaY: number) => Promise<void>;
-            setIgnoreMouseEvents: (ignore: boolean, options?: { forward?: boolean }) => Promise<void>;
-            setAlwaysOnTop: (alwaysOnTop: boolean) => Promise<void>;
-            focusWindow: () => Promise<void>;
-            onWindowBlur: (cb: () => void) => void;
-            onWindowFocus: (cb: () => void) => void;
-        };
-    }
-}
+// DEBUG mode - set to false to remove red window outline
+const DEBUG = false;
 
 type TimerState = 'idle' | 'running' | 'paused' | 'finished';
 type TimerMode = 'countdown' | 'countup';
 
-const ModeBadgeIcon = ({ mode, state }: { mode: TimerMode; state: TimerState }) => {
+const ModeBadgeIcon = ({ mode, state, allowGlow = false }: { mode: TimerMode; state: TimerState; allowGlow?: boolean }) => {
     const isRunning = state === 'running';
     const isPaused = state === 'paused';
     const isFinished = state === 'finished';
@@ -47,10 +35,12 @@ const ModeBadgeIcon = ({ mode, state }: { mode: TimerMode; state: TimerState }) 
             animate={{
                 scale: isRunning ? [1, 1.06, 1] : 1,
                 opacity: isRunning ? [0.95, 1, 0.95] : 1,
-                boxShadow: isFinished ? '0 0 10px rgba(239,68,68,0.35)' :
+                boxShadow: allowGlow ? (
+                    isFinished ? '0 0 10px rgba(239,68,68,0.35)' :
                     isPaused ? '0 0 10px rgba(250,204,21,0.25)' :
                     isRunning ? '0 0 12px rgba(34,211,238,0.35)' :
                     'none'
+                ) : 'none'
             }}
             transition={isRunning ? { 
                 scale: { duration: 1.4, repeat: Infinity, ease: easeApple },
@@ -70,9 +60,18 @@ const ISLAND_H_COLLAPSED = 34;
 const ISLAND_W_IDLE = 150;
 const ISLAND_W_ACTIVE = 140; // running/paused/finished
 
-// IMPORTANT: keep padding small so the window doesn't block clicks
-const PAD_COLLAPSED = 6;   // minimal padding for shadows
-const PAD_EXPANDED = 8;    // enough for shadow, not huge (max 10)
+// IMPORTANT: minimal padding - no shadow area needed
+const PAD_COLLAPSED = 0;   // no padding in collapsed mode (no shadow)
+const PAD_EXPANDED = 2;    // minimal padding when expanded (optional subtle shadow)
+
+// Spacing system for expanded view (Apple-like consistency)
+const PAD_OUTER = 20;      // distance from island border to content
+const GAP_STACK = 16;      // vertical gap between major sections
+const GAP_INLINE = 8;      // small inline gaps
+const HEADER_H = 28;       // header row height alignment target
+const BTN_SIZE = 30;       // top-right icon button hit area (same for all)
+const GAP_MODE_TIME = 18;  // gap between mode toggle and time display
+const GAP_CONTROLS = 24;   // gap between reset and play/pause buttons
 
 const Island = () => {
     const [isExpanded, setIsExpanded] = useState(false);
@@ -123,15 +122,7 @@ const Island = () => {
             window.electron?.setIgnoreMouseEvents(false);
         }, 10);
 
-        // After cooldown, only allow click-through again if pinned + collapsed + not hovering.
-        setTimeout(() => {
-            const coolingDown = Date.now() - lastPinToggleAt.current < PIN_COOLDOWN_MS;
-            if (coolingDown) return;
-
-            if (newState && !isExpanded && !isHovering.current) {
-                window.electron?.setIgnoreMouseEvents(true, { forward: true });
-            }
-        }, PIN_COOLDOWN_MS + 50); // Add small buffer to ensure cooldown passed
+        // Main process handles click-through automatically via polling
     };
 
     const startTimer = () => {
@@ -274,41 +265,7 @@ const Island = () => {
     const isPinnedRef = useRef(isPinned);
     const isExpandedRef = useRef(isExpanded);
 
-    // Manage ignoreMouseEvents based on pin state and expanded state
-    useEffect(() => {
-        if (!window.electron) return;
-
-        const coolingDown = Date.now() - lastPinToggleAt.current < PIN_COOLDOWN_MS;
-
-        // While cooling down, always keep interactive.
-        if (coolingDown) {
-            window.electron.setIgnoreMouseEvents(false);
-            return;
-        }
-
-        // If expanded: always interactive.
-        if (isExpanded) {
-            window.electron.setIgnoreMouseEvents(false);
-            return;
-        }
-
-        // If NOT pinned: never click-through (avoid "lost" window).
-        if (!isPinned) {
-            window.electron.setIgnoreMouseEvents(false);
-            return;
-        }
-
-        // Pinned + collapsed: allow click-through only when not hovering.
-        // Double-check cooldown here too as a failsafe
-        const stillCoolingDown = Date.now() - lastPinToggleAt.current < PIN_COOLDOWN_MS;
-        if (stillCoolingDown || isHovering.current) {
-            window.electron.setIgnoreMouseEvents(false);
-        } else {
-            window.electron.setIgnoreMouseEvents(true, { forward: true });
-        }
-    }, [isExpanded, isPinned]);
-
-    // Keep refs in sync
+    // Keep refs in sync (still used for drag logic)
     useEffect(() => {
         isPinnedRef.current = isPinned;
     }, [isPinned]);
@@ -317,20 +274,17 @@ const Island = () => {
         isExpandedRef.current = isExpanded;
     }, [isExpanded]);
 
-    // Set initial mouse ignore state
+    // NOTE: Main process now handles selective click-through automatically.
+    // We only ensure interactivity when expanded or unpinned.
     useEffect(() => {
         if (!window.electron) return;
 
-        // Start in overlay mode only if pinned
-        if (isPinned) {
-            window.electron.setIgnoreMouseEvents(true, { forward: true });
-        } else {
+        // If expanded: always ensure interactive (main process will also handle this, but ensure it here too)
+        if (isExpanded) {
             window.electron.setIgnoreMouseEvents(false);
         }
-
-        // run once on mount (pin toggle will manage later)
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+        // Main process handles collapsed + pinned click-through automatically via polling
+    }, [isExpanded]);
 
     // Compute current island size
     const islandW = isExpanded
@@ -345,6 +299,14 @@ const Island = () => {
 
     const winW = islandW + pad * 2;
     const winH = islandH + pad * 2;
+
+    // Compute interactive rect in window-local coordinates
+    const interactiveRect = useMemo(() => ({
+        x: pad + ((winW - pad * 2) - islandW) / 2,
+        y: pad,
+        width: islandW,
+        height: islandH,
+    }), [pad, winW, islandW, islandH]);
 
     // Window resize: throttled + deduplicated for smooth performance
     const lastSizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
@@ -366,28 +328,31 @@ const Island = () => {
         return () => cancelAnimationFrame(id);
     }, [winW, winH]);
 
+    // Report overlay mode to main process
+    useEffect(() => {
+        if (!window.electron?.overlaySetMode) return;
+        window.electron.overlaySetMode(isExpanded, isPinned);
+    }, [isExpanded, isPinned]);
+
+    // Report interactive rect to main process
+    useEffect(() => {
+        if (!window.electron?.overlaySetInteractiveRect) return;
+        // Debug log to verify interactiveRect calculation
+        console.log('interactiveRect', interactiveRect, { winW, winH, pad, islandW, islandH });
+        window.electron.overlaySetInteractiveRect(interactiveRect);
+    }, [interactiveRect]);
+
     const handleMouseEnter = () => {
         console.log('React: handleMouseEnter');
         isHovering.current = true;
-        if (window.electron) {
-            // Force interactivity immediately and repeatedly to ensure it sticks
-            window.electron.setIgnoreMouseEvents(false);
-            // Force it again after a tiny delay to override any race conditions
-            setTimeout(() => {
-                if (isHovering.current && window.electron) {
-            window.electron.setIgnoreMouseEvents(false);
-                }
-            }, 10);
-        }
+        // Main process handles click-through automatically, but ensure interactivity when hovering
+        // (main process polling will detect cursor over pill and enable interactivity)
     };
 
     const handleMouseLeave = () => {
         console.log('React: handleMouseLeave', { isDragging: isDragging.current });
         isHovering.current = false;
-        const coolingDown = Date.now() - lastPinToggleAt.current < PIN_COOLDOWN_MS;
-        if (window.electron && isPinnedRef.current && !coolingDown && !isDragging.current && !isExpandedRef.current) {
-            window.electron.setIgnoreMouseEvents(true, { forward: true });
-        }
+        // Main process handles click-through automatically via polling
     };
 
     // Custom drag implementation
@@ -410,16 +375,7 @@ const Island = () => {
 
         const handleMouseUp = () => {
             isDragging.current = false;
-            // If we released drag and we are not hovering anymore (dragged out), 
-            // set transparency back on (only if pinned and not cooling down)
-            if (!isHovering.current && window.electron) {
-                const coolingDown = Date.now() - lastPinToggleAt.current < PIN_COOLDOWN_MS;
-                if (isPinnedRef.current && !coolingDown && !isExpandedRef.current) {
-                window.electron.setIgnoreMouseEvents(true, { forward: true });
-                } else {
-                    window.electron.setIgnoreMouseEvents(false);
-                }
-            }
+            // Main process handles click-through automatically via polling
         };
 
         window.addEventListener('mousemove', handleMouseMove);
@@ -465,7 +421,16 @@ const Island = () => {
     };
 
     return (
-        <div className="w-full h-full flex items-start justify-center" style={{ padding: pad }}>
+        <div 
+            className="w-full h-full flex items-start justify-center" 
+            style={{ 
+                padding: pad,
+                ...(DEBUG ? {
+                    background: 'rgba(255,0,0,0.06)',
+                    outline: '1px solid rgba(255,0,0,0.35)'
+                } : {})
+            }}
+        >
             <motion.div
                 layout
                 className="relative overflow-hidden border border-white/5 select-none cursor-grab active:cursor-grabbing transition-[box-shadow,filter] duration-200 ease-out"
@@ -473,8 +438,8 @@ const Island = () => {
                     background: 'rgba(0, 0, 0, 1)',
                     transformOrigin: '50% 50%',
                     boxShadow: isExpanded
-                        ? '0 18px 36px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255,255,255,0.05)'
-                        : '0 8px 18px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.05)'
+                        ? '0 12px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05)'
+                        : 'none'  // no shadow/glow in collapsed mode
                 }}
                 onMouseEnter={handleMouseEnter}
                 onMouseLeave={handleMouseLeave}
@@ -496,16 +461,20 @@ const Island = () => {
                 {isExpanded ? (
                     <motion.div
                         key="expanded"
-                        className="absolute inset-0 flex flex-col gap-2 p-4 pointer-events-auto"
+                        className="absolute inset-0 flex flex-col pointer-events-auto"
+                        style={{ padding: `${PAD_OUTER}px` }}
                         variants={viewFade}
                         initial="initial"
                         animate="animate"
                         exit="exit"
                     >
-                        {/* Header */}
-                        <div className="flex justify-between items-center">
+                        {/* A) Top Header */}
+                        <div 
+                            className="flex justify-between items-center"
+                            style={{ height: `${HEADER_H}px`, marginBottom: `${GAP_STACK}px` }}
+                        >
                             {/* Left Side: Mode Indicator */}
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center">
                                 <span className={`rounded-full px-2 py-0.5 text-[9px] font-black tracking-[0.15em] border uppercase transition-[background-color,color,border-color] duration-200 ${state === 'running' ? 'bg-cyan-400/10 text-cyan-400 border-cyan-400/20' :
                                     state === 'paused' ? 'bg-yellow-400/10 text-yellow-400 border-yellow-400/20' :
                                         'bg-white/10 text-white border-white/20'
@@ -517,7 +486,8 @@ const Island = () => {
                             {/* Right Side: Controls */}
                             <div 
                                 data-no-drag="true" 
-                                className="flex items-center gap-1"
+                                className="flex items-center"
+                                style={{ gap: `${GAP_INLINE}px` }}
                             >
                                 {/* Pin Toggle */}
                                 <motion.button
@@ -526,13 +496,14 @@ const Island = () => {
                                         togglePin();
                                     }}
                                     title={isPinned ? "Unpin from top" : "Pin to top"}
-                                    className={`p-1.5 rounded-full transition-colors cursor-pointer ${isPinned ? 'text-zinc-200 bg-white/10' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+                                    className={`rounded-full flex items-center justify-center transition-colors cursor-pointer ${isPinned ? 'text-zinc-200 bg-white/10' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
                                         }`}
+                                    style={{ width: `${BTN_SIZE}px`, height: `${BTN_SIZE}px` }}
                                     whileHover={hoverLift}
                                     whileTap={pressTap}
                                     transition={{ duration: 0.12, ease: easeApple }}
                                 >
-                                    {isPinned ? <Pin size={12} fill="currentColor" /> : <PinOff size={12} />}
+                                    {isPinned ? <Pin size={14} fill="currentColor" /> : <PinOff size={14} />}
                                 </motion.button>
 
                                 {/* Always Expanded Toggle */}
@@ -542,17 +513,18 @@ const Island = () => {
                                         setAlwaysExpanded(!alwaysExpanded);
                                     }}
                                     title={alwaysExpanded ? "Disable always expanded" : "Keep expanded"}
-                                    className={`p-1.5 rounded-full transition-colors cursor-pointer ${alwaysExpanded ? 'text-zinc-200 bg-white/10' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+                                    className={`rounded-full flex items-center justify-center transition-colors cursor-pointer ${alwaysExpanded ? 'text-zinc-200 bg-white/10' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
                                         }`}
+                                    style={{ width: `${BTN_SIZE}px`, height: `${BTN_SIZE}px` }}
                                     whileHover={hoverLift}
                                     whileTap={pressTap}
                                     transition={{ duration: 0.12, ease: easeApple }}
                                 >
-                                    {alwaysExpanded ? <Maximize2 size={12} /> : <Minimize2 size={12} />}
+                                    {alwaysExpanded ? <Maximize2 size={14} /> : <Minimize2 size={14} />}
                                 </motion.button>
 
                                 {/* Divider */}
-                                <div className="w-px h-3 bg-white/5 mx-1" />
+                                <div className="w-px h-3 bg-white/5" />
 
                                 {/* Close/Collapse */}
                                 <motion.button
@@ -560,62 +532,71 @@ const Island = () => {
                                         e.stopPropagation();
                                         setIsExpanded(false);
                                     }}
-                                    className="bg-zinc-900 hover:bg-zinc-800 hover:text-white rounded-full p-1.5 transition-colors cursor-pointer group"
+                                    className="bg-zinc-900 hover:bg-zinc-800 hover:text-white rounded-full flex items-center justify-center transition-colors cursor-pointer group"
+                                    style={{ width: `${BTN_SIZE}px`, height: `${BTN_SIZE}px` }}
                                     whileHover={hoverLift}
                                     whileTap={pressTap}
                                     transition={{ duration: 0.12, ease: easeApple }}
                                 >
-                                    <X size={12} className="text-zinc-500 group-hover:text-white" />
+                                    <X size={14} className="text-zinc-500 group-hover:text-white" />
                                 </motion.button>
                             </div>
                         </div>
 
-                        {/* Mode Toggle */}
-                        {state === 'idle' && (
-                            <div className="flex items-center justify-center gap-3 my-2">
-                                <motion.button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        setTimerMode('countdown');
-                                    }}
-                                    className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-full text-[10px] font-black tracking-widest transition-all cursor-pointer uppercase min-w-[120px] relative z-10 ${timerMode === 'countdown'
-                                        ? 'bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.2)]'
-                                        : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
-                                        }`}
-                                    whileHover={hoverLift}
-                                    whileTap={pressTap}
-                                    transition={{ duration: 0.12, ease: easeApple }}
+                        {/* B) Center Content */}
+                        <div 
+                            className="flex-1 flex flex-col items-center justify-center"
+                            style={{ paddingLeft: 0, paddingRight: 0 }}
+                        >
+                            {/* Mode Toggle */}
+                            {state === 'idle' && (
+                                <div 
+                                    className="flex items-center justify-center"
+                                    style={{ gap: `${GAP_INLINE}px`, marginBottom: `${GAP_MODE_TIME}px` }}
                                 >
-                                    <div className="flex items-center gap-2 pointer-events-none">
-                                        <Timer size={14} strokeWidth={3} />
-                                        Timer
-                                    </div>
-                                </motion.button>
-                                <motion.button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        setTimerMode('countup');
-                                    }}
-                                    className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-full text-[10px] font-black tracking-widest transition-all cursor-pointer uppercase min-w-[120px] relative z-10 ${timerMode === 'countup'
-                                        ? 'bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.2)]'
-                                        : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
-                                        }`}
-                                    whileHover={hoverLift}
-                                    whileTap={pressTap}
-                                    transition={{ duration: 0.12, ease: easeApple }}
-                                >
-                                    <div className="flex items-center gap-2 pointer-events-none">
-                                        <Clock size={14} strokeWidth={3} />
-                                        Stopwatch
-                                    </div>
-                                </motion.button>
-                            </div>
-                        )}
+                                    <motion.button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setTimerMode('countdown');
+                                        }}
+                                        className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-full text-[10px] font-black tracking-widest transition-all cursor-pointer uppercase min-w-[120px] relative z-10 ${timerMode === 'countdown'
+                                            ? 'bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.2)]'
+                                            : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
+                                            }`}
+                                        whileHover={hoverLift}
+                                        whileTap={pressTap}
+                                        transition={{ duration: 0.12, ease: easeApple }}
+                                    >
+                                        <div className="flex items-center gap-2 pointer-events-none">
+                                            <Timer size={14} strokeWidth={3} />
+                                            Timer
+                                        </div>
+                                    </motion.button>
+                                    <motion.button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setTimerMode('countup');
+                                        }}
+                                        className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-full text-[10px] font-black tracking-widest transition-all cursor-pointer uppercase min-w-[120px] relative z-10 ${timerMode === 'countup'
+                                            ? 'bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.2)]'
+                                            : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
+                                            }`}
+                                        whileHover={hoverLift}
+                                        whileTap={pressTap}
+                                        transition={{ duration: 0.12, ease: easeApple }}
+                                    >
+                                        <div className="flex items-center gap-2 pointer-events-none">
+                                            <Clock size={14} strokeWidth={3} />
+                                            Stopwatch
+                                        </div>
+                                    </motion.button>
+                                </div>
+                            )}
 
-                        <div className="flex-1 flex items-center justify-center -mt-10">
+                            {/* Time Display / Inputs */}
                             {state === 'idle' ? (
                                 timerMode === 'countdown' ? (
-                                    <div className="flex flex-col items-center justify-center w-full min-h-[160px]">
+                                    <div className="flex flex-col items-center justify-center w-full">
                                         {/* Digit Row */}
                                         <div className="flex items-center justify-center">
                                             <div className="w-24 flex justify-center">
@@ -661,7 +642,7 @@ const Island = () => {
                                         </div>
                                     </div>
                                 ) : (
-                                    <div className="flex flex-col items-center gap-4">
+                                    <div className="flex flex-col items-center" style={{ gap: `${GAP_INLINE * 2}px` }}>
                                         <span className="text-7xl font-mono font-black text-white/20 tracking-tighter tabular-nums">00:00</span>
                                         <span className="text-[10px] font-black tracking-[0.3em] text-zinc-600 uppercase">Ready</span>
                                     </div>
@@ -688,8 +669,11 @@ const Island = () => {
                             )}
                         </div>
 
-                        {/* Controls */}
-                        <div className="flex items-center justify-center gap-8 mb-2">
+                        {/* C) Bottom Controls */}
+                        <div 
+                            className="flex items-center justify-center"
+                            style={{ gap: `${GAP_CONTROLS}px`, marginTop: `${GAP_STACK}px` }}
+                        >
                             <motion.button
                                 onClick={stopTimer}
                                 className="p-3.5 rounded-full bg-zinc-900 hover:bg-white text-zinc-500 hover:text-black transition-colors cursor-pointer shadow-lg"
@@ -744,7 +728,7 @@ const Island = () => {
                         {(state === 'running' || state === 'paused' || state === 'finished') && (
                             <>
                                 <div className="flex items-center gap-2">
-                                    <ModeBadgeIcon mode={timerMode} state={state} />
+                                    <ModeBadgeIcon mode={timerMode} state={state} allowGlow={false} />
                                     <motion.span 
                                         className={`font-mono font-bold tracking-tighter text-sm transition-colors duration-200 ${state === 'running' ? 'text-cyan-400' :
                                             state === 'paused' ? 'text-yellow-400' :

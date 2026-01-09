@@ -17,5 +17,8 @@ electron_1.contextBridge.exposeInMainWorld('electron', {
         electron_1.ipcRenderer.removeAllListeners('overlay-window-focus');
         electron_1.ipcRenderer.on('overlay-window-focus', cb);
     },
+    // Selective click-through control
+    overlaySetMode: (expanded, pinned) => electron_1.ipcRenderer.invoke('overlay-set-mode', { expanded, pinned }),
+    overlaySetInteractiveRect: (rect) => electron_1.ipcRenderer.invoke('overlay-set-interactive-rect', rect),
 });
 //# sourceMappingURL=preload.js.map

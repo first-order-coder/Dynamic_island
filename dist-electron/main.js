@@ -11,6 +11,50 @@ let mainWindow = null;
 // Click-through failsafe: poll cursor position to auto-enable interactivity
 let ignoreMouse = false;
 let hoverPollTimer = null;
+// Selective click-through controller for pill hit-testing
+let overlayExpanded = false;
+let overlayPinned = true;
+let interactiveRect = { x: 0, y: 0, width: 0, height: 0 };
+let pollTimer = null;
+let currentlyIgnoring = false;
+function setIgnoring(ignore) {
+    if (!mainWindow)
+        return;
+    if (currentlyIgnoring === ignore)
+        return;
+    currentlyIgnoring = ignore;
+    mainWindow.setIgnoreMouseEvents(ignore); // NO forward:true
+}
+function startPoll() {
+    if (pollTimer || !mainWindow)
+        return;
+    pollTimer = setInterval(() => {
+        if (!mainWindow)
+            return;
+        // If expanded OR unpinned -> always interactive (never click-through)
+        if (overlayExpanded || !overlayPinned) {
+            setIgnoring(false);
+            return;
+        }
+        // Collapsed + pinned: click-through outside interactiveRect
+        const cursor = electron_1.screen.getCursorScreenPoint();
+        const b = mainWindow.getBounds();
+        const localX = cursor.x - b.x;
+        const localY = cursor.y - b.y;
+        const inside = localX >= interactiveRect.x &&
+            localX <= interactiveRect.x + interactiveRect.width &&
+            localY >= interactiveRect.y &&
+            localY <= interactiveRect.y + interactiveRect.height;
+        // If cursor is over pill -> interactive, else click-through
+        setIgnoring(!inside);
+    }, 33); // ~30fps
+}
+function stopPoll() {
+    if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
+}
 function pointInRect(p, b) {
     return p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height;
 }
@@ -51,22 +95,21 @@ function stopHoverPoll() {
 }
 const createWindow = () => {
     const primaryDisplay = electron_1.screen.getPrimaryDisplay();
-    const { width: screenWidth } = primaryDisplay.workAreaSize;
-    // Start with collapsed size + minimal padding (will be resized by renderer)
-    // Collapsed: ~150w x 34h, Expanded: ~400w x 380h
-    // Initial: collapsed idle size + padding
-    const width = 150 + 32; // collapsed width + padding
-    const height = 34 + 32; // collapsed height + padding
+    const { workArea } = primaryDisplay;
+    // Start with small collapsed size + minimal padding
+    const COLLAPSED_W = 190;
+    const COLLAPSED_H = 60;
     mainWindow = new electron_1.BrowserWindow({
-        width: width,
-        height: height,
-        x: Math.round(screenWidth / 2 - width / 2),
-        y: 0, // Top of screen
+        width: COLLAPSED_W,
+        height: COLLAPSED_H,
+        x: Math.round(workArea.x + workArea.width / 2 - COLLAPSED_W / 2),
+        y: workArea.y + 8,
         frame: false,
         transparent: true,
+        backgroundColor: '#00000000', // Fully transparent background
         alwaysOnTop: true,
         resizable: false, // controlled by setSize
-        hasShadow: false, // We'll render shadow in CSS for more control over shape
+        hasShadow: false, // No window shadow - shadow only in CSS when needed
         webPreferences: {
             preload: path_1.default.join(__dirname, 'preload.js'),
             nodeIntegration: false,
@@ -97,6 +140,7 @@ const createWindow = () => {
     });
     mainWindow.on('closed', () => {
         stopHoverPoll();
+        stopPoll();
         mainWindow = null;
     });
 };
@@ -134,15 +178,13 @@ electron_1.ipcMain.handle('resize-window', (_event, { width, height }) => {
     const { workArea } = display;
     const nextW = Math.round(width);
     const nextH = Math.round(height);
-    // Preserve current window center X, keep y fixed.
-    // This ensures stable resizing without jumping back to center
+    // Preserve the current center X so resizing feels stable even after dragging
     const centerX = b.x + b.width / 2;
     let x = Math.round(centerX - nextW / 2);
     let y = b.y;
-    // Clamp inside work area (keep at least a small portion visible)
-    const minVisible = 20;
-    x = Math.max(workArea.x - nextW + minVisible, Math.min(x, workArea.x + workArea.width - minVisible));
-    y = Math.max(workArea.y, Math.min(y, workArea.y + workArea.height - minVisible));
+    // Clamp window inside work area
+    x = Math.min(Math.max(x, workArea.x), workArea.x + workArea.width - nextW);
+    y = Math.min(Math.max(y, workArea.y), workArea.y + workArea.height - nextH);
     mainWindow.setBounds({ x, y, width: nextW, height: nextH }, false);
 });
 electron_1.ipcMain.handle('move-window', (event, { deltaX, deltaY }) => {
@@ -186,6 +228,9 @@ electron_1.ipcMain.handle('set-always-on-top', (_event, alwaysOnTop) => {
     ignoreMouse = false;
     mainWindow.setIgnoreMouseEvents(false);
     stopHoverPoll();
+    setIgnoring(false); // Also update selective click-through state
+    // Update overlayPinned to match alwaysOnTop
+    overlayPinned = alwaysOnTop;
     if (alwaysOnTop) {
         mainWindow.setAlwaysOnTop(true, 'floating');
         mainWindow.setSkipTaskbar(true);
@@ -199,12 +244,33 @@ electron_1.ipcMain.handle('set-always-on-top', (_event, alwaysOnTop) => {
     // Keep visible
     mainWindow.show();
     mainWindow.moveTop();
+    // Restart selective click-through poll
+    startPoll();
 });
 electron_1.ipcMain.handle('focus-window', () => {
     if (!mainWindow)
         return;
     mainWindow.setIgnoreMouseEvents(false); // must be interactive to focus properly
+    setIgnoring(false); // Also update selective click-through state
     mainWindow.show();
     mainWindow.focus();
+});
+electron_1.ipcMain.handle('overlay-set-mode', (_event, payload) => {
+    overlayExpanded = payload.expanded;
+    overlayPinned = payload.pinned;
+    // When expanded or unpinned: ensure interactive immediately
+    if (overlayExpanded || !overlayPinned) {
+        setIgnoring(false);
+    }
+    startPoll();
+});
+electron_1.ipcMain.handle('overlay-set-interactive-rect', (_event, rect) => {
+    interactiveRect = {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+    };
+    startPoll();
 });
 //# sourceMappingURL=main.js.map

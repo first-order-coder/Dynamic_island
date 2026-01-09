@@ -10,6 +10,56 @@ let mainWindow: BrowserWindow | null = null;
 let ignoreMouse = false;
 let hoverPollTimer: NodeJS.Timeout | null = null;
 
+// Selective click-through controller for pill hit-testing
+let overlayExpanded = false;
+let overlayPinned = true;
+let interactiveRect = { x: 0, y: 0, width: 0, height: 0 };
+let pollTimer: NodeJS.Timeout | null = null;
+let currentlyIgnoring = false;
+
+function setIgnoring(ignore: boolean) {
+    if (!mainWindow) return;
+    if (currentlyIgnoring === ignore) return;
+    currentlyIgnoring = ignore;
+    mainWindow.setIgnoreMouseEvents(ignore); // NO forward:true
+}
+
+function startPoll() {
+    if (pollTimer || !mainWindow) return;
+    pollTimer = setInterval(() => {
+        if (!mainWindow) return;
+
+        // If expanded OR unpinned -> always interactive (never click-through)
+        if (overlayExpanded || !overlayPinned) {
+            setIgnoring(false);
+            return;
+        }
+
+        // Collapsed + pinned: click-through outside interactiveRect
+        const cursor = screen.getCursorScreenPoint();
+        const b = mainWindow.getBounds();
+
+        const localX = cursor.x - b.x;
+        const localY = cursor.y - b.y;
+
+        const inside =
+            localX >= interactiveRect.x &&
+            localX <= interactiveRect.x + interactiveRect.width &&
+            localY >= interactiveRect.y &&
+            localY <= interactiveRect.y + interactiveRect.height;
+
+        // If cursor is over pill -> interactive, else click-through
+        setIgnoring(!inside);
+    }, 33); // ~30fps
+}
+
+function stopPoll() {
+    if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
+}
+
 function pointInRect(p: { x: number; y: number }, b: { x: number; y: number; width: number; height: number }) {
     return p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height;
 }
@@ -69,9 +119,10 @@ const createWindow = () => {
         y: workArea.y + 8,
         frame: false,
         transparent: true,
+        backgroundColor: '#00000000', // Fully transparent background
         alwaysOnTop: true,
         resizable: false, // controlled by setSize
-        hasShadow: false, // We'll render shadow in CSS for more control over shape
+        hasShadow: false, // No window shadow - shadow only in CSS when needed
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: false,
@@ -107,6 +158,7 @@ const createWindow = () => {
 
     mainWindow.on('closed', () => {
         stopHoverPoll();
+        stopPoll();
         mainWindow = null;
     });
 };
@@ -209,6 +261,10 @@ ipcMain.handle('set-always-on-top', (_event, alwaysOnTop: boolean) => {
     ignoreMouse = false;
     mainWindow.setIgnoreMouseEvents(false);
     stopHoverPoll();
+    setIgnoring(false); // Also update selective click-through state
+
+    // Update overlayPinned to match alwaysOnTop
+    overlayPinned = alwaysOnTop;
 
     if (alwaysOnTop) {
         mainWindow.setAlwaysOnTop(true, 'floating');
@@ -224,11 +280,37 @@ ipcMain.handle('set-always-on-top', (_event, alwaysOnTop: boolean) => {
     // Keep visible
     mainWindow.show();
     mainWindow.moveTop();
+
+    // Restart selective click-through poll
+    startPoll();
 });
 
 ipcMain.handle('focus-window', () => {
     if (!mainWindow) return;
     mainWindow.setIgnoreMouseEvents(false); // must be interactive to focus properly
+    setIgnoring(false); // Also update selective click-through state
     mainWindow.show();
     mainWindow.focus();
+});
+
+ipcMain.handle('overlay-set-mode', (_event, payload: { expanded: boolean; pinned: boolean }) => {
+    overlayExpanded = payload.expanded;
+    overlayPinned = payload.pinned;
+
+    // When expanded or unpinned: ensure interactive immediately
+    if (overlayExpanded || !overlayPinned) {
+        setIgnoring(false);
+    }
+
+    startPoll();
+});
+
+ipcMain.handle('overlay-set-interactive-rect', (_event, rect: { x: number; y: number; width: number; height: number }) => {
+    interactiveRect = {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+    };
+    startPoll();
 });
