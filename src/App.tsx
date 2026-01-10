@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Play, Pause, RefreshCw, Timer, Clock, Pin, PinOff, LocateFixed, Power } from 'lucide-react';
+import { Play, Pause, RefreshCw, Timer, Clock, Pin, PinOff, LocateFixed, Power, Flame, Coffee } from 'lucide-react';
 import { springApple, viewFade, easeApple, pressTap, hoverLift, fadeMed } from './motion';
 
 // DEBUG mode - set to false to remove red window outline
 const DEBUG = false;
 
 type TimerState = 'idle' | 'running' | 'paused' | 'finished';
-type TimerMode = 'countdown' | 'countup';
+type TimerMode = 'countdown' | 'countup' | 'pomodoro';
+type PomodoroPhase = 'work' | 'short_break' | 'long_break';
 
 // Finish animation constants (single source of truth)
 const easePremium: [number, number, number, number] = [0.22, 0.61, 0.36, 1]; // iOS-ish
@@ -85,7 +86,7 @@ const ModeBadgeIcon = ({ mode, state, allowGlow = false }: { mode: TimerMode; st
         isRunning ? 'border-cyan-400/20 bg-cyan-400/10' :
         'border-white/10 bg-white/5';
 
-    const Icon = mode === 'countdown' ? Timer : Clock;
+    const Icon = mode === 'countdown' ? Timer : mode === 'countup' ? Clock : Flame;
 
     return (
         <motion.div
@@ -134,9 +135,7 @@ const GAP_CONTROLS = 24;   // gap between reset and play/pause buttons
 
 const Island = () => {
     const [isExpanded, setIsExpanded] = useState(false);
-    const [isExiting, setIsExiting] = useState(false); // Exit-staging state for smooth transitions
-    const [isCollapsing, setIsCollapsing] = useState(false); // Collapse staging state to prevent header flash
-    const COLLAPSE_EXIT_MS = 160; // Duration for smooth exit before collapsing
+    const [isSizeExpanded, setIsSizeExpanded] = useState(false); // Controls container/window size (stays expanded during exit)
     const [state, setState] = useState<TimerState>('idle');
     const [timeLeft, setTimeLeft] = useState(15 * 60);
     const [timerMode, setTimerMode] = useState<TimerMode>('countdown');
@@ -144,9 +143,25 @@ const Island = () => {
     const [inputMinutes, setInputMinutes] = useState(15);
     const [inputSeconds, setInputSeconds] = useState(0);
 
+    // Pomodoro settings
+    const [workMinutes, setWorkMinutes] = useState(25);
+    const [shortBreakMinutes, setShortBreakMinutes] = useState(5);
+    const [longBreakMinutes, setLongBreakMinutes] = useState(15);
+    const [longBreakEvery, setLongBreakEvery] = useState(4);
+    const [autoStartNext, setAutoStartNext] = useState(true);
+
+    // Pomodoro runtime state
+    const [pomodoroPhase, setPomodoroPhase] = useState<PomodoroPhase>('work');
+    const [pomodoroSessionCount, setPomodoroSessionCount] = useState(0);
+
     // New Features State
     const [isPinned, setIsPinned] = useState(true);
     const [alwaysExpanded, setAlwaysExpanded] = useState(false);
+
+    // Dismissal state for smooth collapse transition
+    const [isDismissing, setIsDismissing] = useState(false);
+    const DISMISS_CHROME_MS = 90;
+    const DISMISS_SHRINK_DELAY_MS = 60;
 
     // Finish animation trigger state
     const [finishFxKey, setFinishFxKey] = useState(0);
@@ -154,22 +169,21 @@ const Island = () => {
     const finishedFromCountdownRef = useRef(false);
     const finishScaleKey = useRef(0);
 
-    // Derived state: use effectiveExpanded for container sizing (delays morph until after content fade starts)
-    // Use isCollapsing to prevent header flash during collapse
-    const effectiveExpanded = isExpanded && !isExiting && !isCollapsing;
-    
-    // Function to request collapse with smooth staging
+    // Function to request collapse (triggers exit animation immediately)
     const requestCollapse = () => {
-        // If already collapsed or already collapsing, no-op
-        if (!isExpanded || isCollapsing) return;
-        
-        // Stage exit first to start fade-out animation
-        setIsCollapsing(true);
-        
+        if (!isExpanded) return;
+        if (alwaysExpanded) return;
+
+        // Begin dismissal immediately to avoid header flash
+        setIsDismissing(true);
+
+        // Start exit animation (expanded view exits)
+        setIsExpanded(false);
+
+        // Start shrinking shortly after so it "snaps" into pill visually
         window.setTimeout(() => {
-            setIsExpanded(false);
-            setIsCollapsing(false);
-        }, COLLAPSE_EXIT_MS);
+            setIsSizeExpanded(false);
+        }, DISMISS_SHRINK_DELAY_MS);
     };
 
     const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -235,13 +249,25 @@ const Island = () => {
                 const total = inputMinutes * 60 + inputSeconds;
                 setTimeLeft(total);
                 endTimeRef.current = now + total * 1000;
+            } else if (timerMode === 'pomodoro') {
+                // Initialize Pomodoro phase and timeLeft if needed
+                const phaseDuration = pomodoroPhase === 'work' 
+                    ? workMinutes * 60 
+                    : pomodoroPhase === 'short_break' 
+                    ? shortBreakMinutes * 60 
+                    : longBreakMinutes * 60;
+                
+                if (timeLeft === 0 || timeLeft !== phaseDuration) {
+                    setTimeLeft(phaseDuration);
+                }
+                endTimeRef.current = now + timeLeft * 1000;
             } else {
                 setTimeLeft(0);
                 startTimeRef.current = now;
             }
         } else if (state === 'paused') {
             // Resuming logic
-            if (timerMode === 'countdown') {
+            if (timerMode === 'countdown' || timerMode === 'pomodoro') {
                 // Determine new end time based on remaining timeLeft
                 endTimeRef.current = now + timeLeft * 1000;
             } else {
@@ -262,7 +288,14 @@ const Island = () => {
 
     const stopTimer = () => {
         setState('idle');
-        if (timerMode === 'countup') setTimeLeft(0);
+        if (timerMode === 'countup') {
+            setTimeLeft(0);
+        } else if (timerMode === 'pomodoro') {
+            // Reset Pomodoro state
+            setPomodoroPhase('work');
+            setPomodoroSessionCount(0);
+            setTimeLeft(workMinutes * 60);
+        }
         if (timerRef.current) clearInterval(timerRef.current);
         finishedFromCountdownRef.current = false;
         finishScaleKey.current = 0;
@@ -285,49 +318,131 @@ const Island = () => {
         osc.stop(ctx.currentTime + 0.5);
     };
 
+    // Advance Pomodoro phase when current phase completes (using ref to access latest values)
+    const pomodoroPhaseRef = useRef(pomodoroPhase);
+    const pomodoroSessionCountRef = useRef(pomodoroSessionCount);
+    
+    useEffect(() => {
+        pomodoroPhaseRef.current = pomodoroPhase;
+        pomodoroSessionCountRef.current = pomodoroSessionCount;
+    }, [pomodoroPhase, pomodoroSessionCount]);
+    
+    const advancePomodoroPhase = (now: number) => {
+        const currentPhase = pomodoroPhaseRef.current;
+        const currentCount = pomodoroSessionCountRef.current;
+        
+        if (currentPhase === 'work') {
+            // Work phase finished - increment session count
+            const newCount = currentCount + 1;
+            setPomodoroSessionCount(newCount);
+            
+            // Determine next phase: long break every N sessions, otherwise short break
+            const nextPhase: PomodoroPhase = newCount % longBreakEvery === 0 ? 'long_break' : 'short_break';
+            setPomodoroPhase(nextPhase);
+            
+            const nextDuration = nextPhase === 'long_break' 
+                ? longBreakMinutes * 60 
+                : shortBreakMinutes * 60;
+            
+            setTimeLeft(nextDuration);
+            
+            if (autoStartNext) {
+                // Auto-start next phase
+                endTimeRef.current = now + nextDuration * 1000;
+                setState('running');
+            } else {
+                // Wait for user to start
+                setState('paused');
+            }
+        } else {
+            // Break phase finished - return to work
+            setPomodoroPhase('work');
+            const workDuration = workMinutes * 60;
+            setTimeLeft(workDuration);
+            
+            if (autoStartNext) {
+                // Auto-start work phase
+                endTimeRef.current = now + workDuration * 1000;
+                setState('running');
+            } else {
+                // Wait for user to start
+                setState('paused');
+            }
+        }
+    };
+
     useEffect(() => {
         if (state === 'running') {
             timerRef.current = setInterval(() => {
                 const now = Date.now();
 
-                setTimeLeft((prev) => {
-                    if (timerMode === 'countdown') {
-                        const remaining = Math.max(0, Math.ceil((endTimeRef.current - now) / 1000));
+                if (timerMode === 'countdown' || timerMode === 'pomodoro') {
+                    const remaining = Math.max(0, Math.ceil((endTimeRef.current - now) / 1000));
+                    setTimeLeft(remaining);
 
-                        if (remaining <= 0) {
+                    if (remaining <= 0) {
+                        finishedFromCountdownRef.current = true;
+                        setFinishFxKey((k) => k + 1);
+                        finishScaleKey.current += 1;
+                        playBeep();
+                        
+                        if (timerMode === 'pomodoro') {
+                            // Advance Pomodoro phase
+                            const wasAutoStart = autoStartNext;
+                            advancePomodoroPhase(now);
+                            
+                            // If autoStartNext is false, pause and clear interval
+                            if (!wasAutoStart) {
+                                clearInterval(timerRef.current!);
+                                setState('paused');
+                            }
+                            // If autoStartNext is true, interval continues with updated endTimeRef
+                        } else {
+                            // Countdown finished
                             clearInterval(timerRef.current!);
-                            finishedFromCountdownRef.current = true;
-                            setFinishFxKey((k) => k + 1);
-                            finishScaleKey.current += 1;
                             setState('finished');
                             // DO NOT auto-expand on finish - keep current expanded state
-                            playBeep();
-                            return 0;
+                            setTimeLeft(0);
                         }
-                        return remaining;
-                    } else {
-                        // Countup - use max to prevent negative jitter on first tick
-                        const elapsed = Math.max(0, Math.floor((now - startTimeRef.current) / 1000));
-                        return elapsed;
                     }
-                });
+                } else {
+                    // Countup - use max to prevent negative jitter on first tick
+                    const elapsed = Math.max(0, Math.floor((now - startTimeRef.current) / 1000));
+                    setTimeLeft(elapsed);
+                }
             }, 100); // Check more frequently for smoothness, though updating state effectively per second change
         }
         return () => {
             if (timerRef.current) clearInterval(timerRef.current);
         };
-    }, [state, timerMode]);
+    }, [state, timerMode, autoStartNext]);
+
+    // Reset Pomodoro state when switching away from Pomodoro mode
+    useEffect(() => {
+        if (timerMode !== 'pomodoro' && state === 'idle') {
+            setPomodoroPhase('work');
+            setPomodoroSessionCount(0);
+        }
+    }, [timerMode, state]);
 
     // Sync timeLeft with inputs when idle
     useEffect(() => {
         if (state === 'idle') {
             if (timerMode === 'countdown') {
                 setTimeLeft(inputMinutes * 60 + inputSeconds);
+            } else if (timerMode === 'pomodoro') {
+                // Sync timeLeft to current phase duration
+                const phaseDuration = pomodoroPhase === 'work' 
+                    ? workMinutes * 60 
+                    : pomodoroPhase === 'short_break' 
+                    ? shortBreakMinutes * 60 
+                    : longBreakMinutes * 60;
+                setTimeLeft(phaseDuration);
             } else {
                 setTimeLeft(0);
             }
         }
-    }, [inputMinutes, inputSeconds, state, timerMode]);
+    }, [inputMinutes, inputSeconds, state, timerMode, pomodoroPhase, workMinutes, shortBreakMinutes, longBreakMinutes]);
 
     // Use main-process BrowserWindow blur/focus events (source of truth)
     useEffect(() => {
@@ -336,10 +451,8 @@ const Island = () => {
         const onBlur = () => {
             // Ignore blur during cooldown to prevent forced collapse
             if (Date.now() - lastPinToggleAt.current < PIN_COOLDOWN_MS) return;
-            // Collapse on real BrowserWindow blur (outside click) with smooth exit staging
+            // Collapse on real BrowserWindow blur (outside click)
             if (isExpanded && !alwaysExpanded) {
-                setIsExiting(true);
-                // Use requestCollapse for consistent staging
                 requestCollapse();
             }
         };
@@ -404,16 +517,16 @@ const Island = () => {
         return () => window.clearTimeout(t);
     }, [finishFxKey]);
 
-    // Compute current island size using effectiveExpanded (delays container morph for smooth transition)
-    const islandW = effectiveExpanded
+    // Compute current island size using isSizeExpanded (keeps size expanded during exit animation)
+    const islandW = isSizeExpanded
         ? ISLAND_W_EXPANDED
         : (state === 'running' || state === 'paused' || state === 'finished')
             ? ISLAND_W_ACTIVE
             : ISLAND_W_IDLE;
 
-    const islandH = effectiveExpanded ? ISLAND_H_EXPANDED : ISLAND_H_COLLAPSED;
+    const islandH = isSizeExpanded ? ISLAND_H_EXPANDED : ISLAND_H_COLLAPSED;
 
-    const pad = effectiveExpanded ? PAD_EXPANDED : PAD_COLLAPSED;
+    const pad = isSizeExpanded ? PAD_EXPANDED : PAD_COLLAPSED;
 
     const winW = islandW + pad * 2;
     const winH = islandH + pad * 2;
@@ -553,7 +666,7 @@ const Island = () => {
     const handleClick = () => {
         // Only expand if we didn't drag
         if (!hasMoved.current && !isExpanded) {
-            setIsExiting(false); // Reset exit state when expanding
+            setIsSizeExpanded(true);
             setIsExpanded(true);
             // Force focus so the next outside click triggers a real blur event
             window.electron?.focusWindow?.();
@@ -628,7 +741,7 @@ const Island = () => {
                         height: '100%',
                         background: 'rgba(0, 0, 0, 1)',
                         transformOrigin: '50% 50%',
-                        boxShadow: effectiveExpanded
+                        boxShadow: isSizeExpanded
                             ? '0 12px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05)'
                             : 'none' // no shadow/glow in collapsed mode
                     }}
@@ -636,7 +749,7 @@ const Island = () => {
                     onMouseLeave={handleMouseLeave}
                     initial={false}
                     animate={{
-                        borderRadius: effectiveExpanded ? 48 : COLLAPSED_RADIUS,
+                        borderRadius: isSizeExpanded ? 48 : COLLAPSED_RADIUS,
                     }}
                     transition={{
                         borderRadius: springApple,
@@ -653,15 +766,21 @@ const Island = () => {
                 {/* Finish Glow Ping - tight red edge halo overlay with smooth fade */}
                 <FinishGlow visible={finishGlowOn} />
 
-            {/* CONTENT VIEWS - Single AnimatePresence with mode="wait" for smooth transitions */}
-            {/* Use isExpanded (not effectiveExpanded) so expanded content stays visible during exit animation */}
-            {/* When isCollapsing is true, expanded view exits; after timeout, isExpanded becomes false and collapsed enters */}
-            {/* Change key when collapsing to force exit animation */}
-            <AnimatePresence mode="wait" initial={false}>
-                {(isExpanded || isCollapsing) ? (
+            {/* AnimatePresence with onExitComplete: shrink container/window AFTER expanded content exits */}
+            <AnimatePresence 
+                mode="wait" 
+                initial={false}
+                onExitComplete={() => {
+                    if (!isExpanded) {
+                        setIsSizeExpanded(false);   // safety
+                        setIsDismissing(false);     // reset after dismissal
+                    }
+                }}
+            >
+                {isExpanded ? (
                     <motion.div
-                        key={isCollapsing ? "expanded-exiting" : "expanded"}
-                        className="absolute inset-0 flex flex-col pointer-events-auto"
+                        key="expanded"
+                        className="absolute inset-0 w-full min-w-0 flex flex-col pointer-events-auto"
                         style={{ padding: `${PAD_OUTER}px` }}
                         variants={viewFade}
                         initial="initial"
@@ -669,132 +788,279 @@ const Island = () => {
                         exit="exit"
                     >
                         {/* A) Top Header */}
-                        <div 
-                            className="flex justify-between items-center"
+                        <motion.div
+                            initial={false}
+                            animate={{ opacity: isDismissing ? 0 : 1, y: isDismissing ? -2 : 0 }}
+                            transition={{ duration: DISMISS_CHROME_MS / 1000, ease: easeApple }}
                             style={{ height: `${HEADER_H}px`, marginBottom: `${GAP_STACK}px` }}
                         >
-                            {/* Left Side: Mode Indicator */}
-                            <div className="flex items-center">
-                                <span className={`rounded-full px-2 py-0.5 text-[9px] font-black tracking-[0.15em] border uppercase transition-[background-color,color,border-color] duration-200 ${state === 'running' ? 'bg-cyan-400/10 text-cyan-400 border-cyan-400/20' :
-                                    state === 'paused' ? 'bg-yellow-400/10 text-yellow-400 border-yellow-400/20' :
-                                        'bg-white/10 text-white border-white/20'
-                                    }`}>
-                                    {state === 'idle' ? timerMode : state}
-                                </span>
-                            </div>
-
-                            {/* Right Side: Controls */}
                             <div 
-                                data-no-drag="true" 
-                                className="flex items-center"
-                                style={{ gap: `${GAP_INLINE}px` }}
+                                className="flex justify-between items-center"
+                                style={{ height: `${HEADER_H}px` }}
                             >
-                                {/* Pin Toggle */}
-                                <motion.button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        togglePin();
-                                    }}
-                                    title={isPinned ? "Unpin from top" : "Pin to top"}
-                                    className={`rounded-full flex items-center justify-center transition-colors cursor-pointer ${isPinned ? 'text-zinc-200 bg-white/10' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
-                                        }`}
-                                    style={{ width: `${BTN_SIZE}px`, height: `${BTN_SIZE}px` }}
-                                    whileHover={hoverLift}
-                                    whileTap={pressTap}
-                                    transition={{ duration: 0.12, ease: easeApple }}
-                                >
-                                    {isPinned ? <Pin size={14} fill="currentColor" /> : <PinOff size={14} />}
-                                </motion.button>
+                                {/* Left Side: Mode Indicator */}
+                                <div className="flex items-center">
+                                    <span className={`rounded-full px-2 py-0.5 text-[9px] font-black tracking-[0.15em] border uppercase transition-[background-color,color,border-color] duration-200 ${state === 'running' ? 'bg-cyan-400/10 text-cyan-400 border-cyan-400/20' :
+                                        state === 'paused' ? 'bg-yellow-400/10 text-yellow-400 border-yellow-400/20' :
+                                            'bg-white/10 text-white border-white/20'
+                                        }`}>
+                                        {state === 'idle' ? timerMode : state}
+                                    </span>
+                                </div>
 
-                                {/* Quit App */}
-                                <motion.button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        window.electron?.setIgnoreMouseEvents(false); // ensure interactivity
-                                        window.electron?.quitApp?.();
-                                    }}
-                                    title="Quit"
-                                    className="rounded-full flex items-center justify-center transition-colors cursor-pointer relative z-50 text-zinc-500 hover:text-red-300 hover:bg-red-500/10"
-                                    style={{ width: `${BTN_SIZE}px`, height: `${BTN_SIZE}px` }}
-                                    data-no-drag="true"
-                                    whileHover={hoverLift}
-                                    whileTap={pressTap}
-                                    transition={{ duration: 0.12, ease: easeApple }}
+                                {/* Right Side: Controls */}
+                                <div 
+                                    data-no-drag="true" 
+                                    className="flex items-center"
+                                    style={{ gap: `${GAP_INLINE}px` }}
                                 >
-                                    <Power size={14} />
-                                </motion.button>
+                                    {/* Pin Toggle */}
+                                    <motion.button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            togglePin();
+                                        }}
+                                        title={isPinned ? "Unpin from top" : "Pin to top"}
+                                        className={`rounded-full flex items-center justify-center transition-colors cursor-pointer ${isPinned ? 'text-zinc-200 bg-white/10' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+                                            }`}
+                                        style={{ width: `${BTN_SIZE}px`, height: `${BTN_SIZE}px` }}
+                                        whileHover={hoverLift}
+                                        whileTap={pressTap}
+                                        transition={{ duration: 0.12, ease: easeApple }}
+                                    >
+                                        {isPinned ? <Pin size={14} fill="currentColor" /> : <PinOff size={14} />}
+                                    </motion.button>
 
-                                {/* Divider */}
-                                <div className="w-px h-3 bg-white/5" />
+                                    {/* Quit App */}
+                                    <motion.button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            window.electron?.setIgnoreMouseEvents(false); // ensure interactivity
+                                            window.electron?.quitApp?.();
+                                        }}
+                                        title="Quit"
+                                        className="rounded-full flex items-center justify-center transition-colors cursor-pointer relative z-50 text-zinc-500 hover:text-red-300 hover:bg-red-500/10"
+                                        style={{ width: `${BTN_SIZE}px`, height: `${BTN_SIZE}px` }}
+                                        data-no-drag="true"
+                                        whileHover={hoverLift}
+                                        whileTap={pressTap}
+                                        transition={{ duration: 0.12, ease: easeApple }}
+                                    >
+                                        <Power size={14} />
+                                    </motion.button>
 
-                                {/* Recenter */}
-                                <motion.button
-                                    onClick={handleRecenter}
-                                    title="Recenter"
-                                    className="bg-zinc-900 hover:bg-zinc-800 hover:text-white rounded-full flex items-center justify-center transition-colors cursor-pointer group relative z-50 pointer-events-auto"
-                                    style={{ width: `${BTN_SIZE}px`, height: `${BTN_SIZE}px` }}
-                                    whileHover={hoverLift}
-                                    whileTap={pressTap}
-                                    transition={{ duration: 0.12, ease: easeApple }}
-                                >
-                                    <LocateFixed size={14} className="text-zinc-500 group-hover:text-white" />
-                                </motion.button>
+                                    {/* Divider */}
+                                    <div className="w-px h-3 bg-white/5" />
+
+                                    {/* Recenter */}
+                                    <motion.button
+                                        onClick={handleRecenter}
+                                        title="Recenter"
+                                        className="bg-zinc-900 hover:bg-zinc-800 hover:text-white rounded-full flex items-center justify-center transition-colors cursor-pointer group relative z-50 pointer-events-auto"
+                                        style={{ width: `${BTN_SIZE}px`, height: `${BTN_SIZE}px` }}
+                                        whileHover={hoverLift}
+                                        whileTap={pressTap}
+                                        transition={{ duration: 0.12, ease: easeApple }}
+                                    >
+                                        <LocateFixed size={14} className="text-zinc-500 group-hover:text-white" />
+                                    </motion.button>
+                                </div>
                             </div>
-                        </div>
+                        </motion.div>
 
                         {/* B) Center Content */}
                         <div 
-                            className="flex-1 flex flex-col items-center justify-center"
+                            className="flex-1 w-full min-w-0 flex flex-col items-center justify-center"
                             style={{ paddingLeft: 0, paddingRight: 0 }}
                         >
                             {/* Mode Toggle */}
                             {state === 'idle' && (
-                                <div 
-                                    className="flex items-center justify-center"
+                                <div
+                                    className="w-full min-w-0 grid grid-cols-3"
                                     style={{ gap: `${GAP_INLINE}px`, marginBottom: `${GAP_MODE_TIME}px` }}
                                 >
+                                    {/* Countdown */}
                                     <motion.button
                                         onClick={(e) => {
                                             e.stopPropagation();
                                             setTimerMode('countdown');
                                         }}
-                                        className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-full text-[10px] font-black tracking-widest transition-all cursor-pointer uppercase min-w-[120px] relative z-10 ${timerMode === 'countdown'
-                                            ? 'bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.2)]'
+                                        className={`min-w-0 w-full flex items-center justify-center gap-2 rounded-full px-3 py-2 text-[10px] font-black tracking-widest uppercase transition-all cursor-pointer ${timerMode === 'countdown'
+                                            ? 'bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.16)]'
                                             : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
                                             }`}
                                         whileHover={hoverLift}
                                         whileTap={pressTap}
                                         transition={{ duration: 0.12, ease: easeApple }}
                                     >
-                                        <div className="flex items-center gap-2 pointer-events-none">
-                                            <Timer size={14} strokeWidth={3} />
-                                            Timer
-                                        </div>
+                                        <Timer size={14} strokeWidth={3} className="shrink-0" />
+                                        <span className="truncate">Timer</span>
                                     </motion.button>
+
+                                    {/* Countup */}
                                     <motion.button
                                         onClick={(e) => {
                                             e.stopPropagation();
                                             setTimerMode('countup');
                                         }}
-                                        className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-full text-[10px] font-black tracking-widest transition-all cursor-pointer uppercase min-w-[120px] relative z-10 ${timerMode === 'countup'
-                                            ? 'bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.2)]'
+                                        className={`min-w-0 w-full flex items-center justify-center gap-2 rounded-full px-3 py-2 text-[10px] font-black tracking-widest uppercase transition-all cursor-pointer ${timerMode === 'countup'
+                                            ? 'bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.16)]'
                                             : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
                                             }`}
                                         whileHover={hoverLift}
                                         whileTap={pressTap}
                                         transition={{ duration: 0.12, ease: easeApple }}
                                     >
-                                        <div className="flex items-center gap-2 pointer-events-none">
-                                            <Clock size={14} strokeWidth={3} />
-                                            Stopwatch
-                                        </div>
+                                        <Clock size={14} strokeWidth={3} className="shrink-0" />
+                                        <span className="truncate">Stopwatch</span>
+                                    </motion.button>
+
+                                    {/* Pomodoro */}
+                                    <motion.button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setTimerMode('pomodoro');
+                                        }}
+                                        className={`min-w-0 w-full flex items-center justify-center gap-2 rounded-full px-3 py-2 text-[10px] font-black tracking-widest uppercase transition-all cursor-pointer ${timerMode === 'pomodoro'
+                                            ? 'bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.16)]'
+                                            : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
+                                            }`}
+                                        whileHover={hoverLift}
+                                        whileTap={pressTap}
+                                        transition={{ duration: 0.12, ease: easeApple }}
+                                    >
+                                        <Flame size={14} strokeWidth={3} className="shrink-0" />
+                                        <span className="truncate">Pomodoro</span>
                                     </motion.button>
                                 </div>
                             )}
 
                             {/* Time Display / Inputs */}
                             {state === 'idle' ? (
-                                timerMode === 'countdown' ? (
+                                timerMode === 'pomodoro' ? (
+                                    <div className="flex flex-col items-center justify-center w-full" style={{ gap: `${GAP_STACK}px` }}>
+                                        {/* Settings */}
+                                        <div className="w-fit mx-auto grid grid-cols-[max-content_96px_max-content] gap-x-4 gap-y-4 items-center">
+                                            {/* Work */}
+                                            <label className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase text-right whitespace-nowrap">
+                                                Work
+                                            </label>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                max="99"
+                                                value={workMinutes}
+                                                onChange={(e) => {
+                                                    const val = Math.max(1, Math.min(99, parseInt(e.target.value) || 1));
+                                                    setWorkMinutes(val);
+                                                }}
+                                                className="w-[96px] bg-zinc-900 border border-white/10 rounded px-2 py-1.5 text-center text-white text-sm font-mono focus:outline-none focus:border-white/20"
+                                            />
+                                            <span className="text-[10px] text-zinc-600 whitespace-nowrap text-left">
+                                                min
+                                            </span>
+
+                                            {/* Short Break */}
+                                            <label className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase text-right whitespace-nowrap">
+                                                Short break
+                                            </label>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                max="60"
+                                                value={shortBreakMinutes}
+                                                onChange={(e) => {
+                                                    const val = Math.max(1, Math.min(60, parseInt(e.target.value) || 1));
+                                                    setShortBreakMinutes(val);
+                                                }}
+                                                className="w-[96px] bg-zinc-900 border border-white/10 rounded px-2 py-1.5 text-center text-white text-sm font-mono focus:outline-none focus:border-white/20"
+                                            />
+                                            <span className="text-[10px] text-zinc-600 whitespace-nowrap text-left">
+                                                min
+                                            </span>
+
+                                            {/* Long Break */}
+                                            <label className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase text-right whitespace-nowrap">
+                                                Long break
+                                            </label>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                max="60"
+                                                value={longBreakMinutes}
+                                                onChange={(e) => {
+                                                    const val = Math.max(1, Math.min(60, parseInt(e.target.value) || 1));
+                                                    setLongBreakMinutes(val);
+                                                }}
+                                                className="w-[96px] bg-zinc-900 border border-white/10 rounded px-2 py-1.5 text-center text-white text-sm font-mono focus:outline-none focus:border-white/20"
+                                            />
+                                            <span className="text-[10px] text-zinc-600 whitespace-nowrap text-left">
+                                                min
+                                            </span>
+
+                                            {/* Long Break Every */}
+                                            <label className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase text-right whitespace-nowrap">
+                                                Long break every
+                                            </label>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                max="10"
+                                                value={longBreakEvery}
+                                                onChange={(e) => {
+                                                    const val = Math.max(1, Math.min(10, parseInt(e.target.value) || 1));
+                                                    setLongBreakEvery(val);
+                                                }}
+                                                className="w-[96px] bg-zinc-900 border border-white/10 rounded px-2 py-1.5 text-center text-white text-sm font-mono focus:outline-none focus:border-white/20"
+                                            />
+                                            <span className="text-[10px] text-zinc-600 whitespace-nowrap text-left">
+                                                sessions
+                                            </span>
+
+                                            {/* Auto-start Next */}
+                                            <label className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase text-right whitespace-nowrap">
+                                                Auto-start next
+                                            </label>
+
+                                            {/* Keep your existing toggle button exactly, just placed in column 2 */}
+                                            <div className="justify-self-start">
+                                                <motion.button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setAutoStartNext(!autoStartNext);
+                                                    }}
+                                                    className={`w-12 h-6 rounded-full transition-colors ${autoStartNext ? 'bg-cyan-400' : 'bg-zinc-800'}`}
+                                                    whileTap={pressTap}
+                                                >
+                                                    <motion.div
+                                                        className="w-5 h-5 bg-white rounded-full shadow-lg"
+                                                        animate={{ x: autoStartNext ? 26 : 2 }}
+                                                        transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                                                    />
+                                                </motion.button>
+                                            </div>
+
+                                            {/* Blank unit cell to keep the 3rd column aligned */}
+                                            <span />
+                                        </div>
+                                        
+                                        {/* Current Phase Display */}
+                                        <div className="flex flex-col items-center" style={{ gap: `${GAP_INLINE}px`, marginTop: `${GAP_STACK}px` }}>
+                                            <span className="text-7xl font-mono font-black text-white tracking-tighter tabular-nums">
+                                                {formatTime(timeLeft)}
+                                            </span>
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-[10px] font-black tracking-[0.3em] text-zinc-600 uppercase">
+                                                    {pomodoroPhase === 'work' ? 'Work' : pomodoroPhase === 'short_break' ? 'Break' : 'Long Break'}
+                                                </span>
+                                                <span className="text-[10px] text-zinc-600">•</span>
+                                                <span className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase">
+                                                    Session {pomodoroSessionCount + 1} / {longBreakEvery}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : timerMode === 'countdown' ? (
                                     <div className="flex flex-col items-center justify-center w-full">
                                         {/* Digit Row */}
                                         <div className="flex items-center justify-center">
@@ -847,24 +1113,37 @@ const Island = () => {
                                     </div>
                                 )
                             ) : (
-                                <motion.div
-                                    className={`text-8xl font-mono font-black tracking-tighter tabular-nums antialiased transition-[color,filter] duration-200 ease-out ${state === 'running' ? 'text-cyan-400' :
-                                        state === 'paused' ? 'text-yellow-400' :
-                                            state === 'finished' ? 'text-red-500' : 'text-white'
-                                        }`}
-                                    animate={{
-                                        filter: state === 'running'
-                                            ? 'drop-shadow(0 0 15px rgba(34, 211, 238, 0.4))'
-                                            : state === 'paused'
-                                                ? 'drop-shadow(0 0 10px rgba(250, 204, 21, 0.2))'
-                                                : state === 'finished'
-                                                    ? 'drop-shadow(0 0 10px rgba(239, 68, 68, 0.3))'
-                                                    : 'none'
-                                    }}
-                                    transition={fadeMed}
-                                >
-                                    {formatTime(timeLeft)}
-                                </motion.div>
+                                <div className="flex flex-col items-center" style={{ gap: `${GAP_INLINE * 2}px` }}>
+                                    <motion.div
+                                        className={`text-8xl font-mono font-black tracking-tighter tabular-nums antialiased transition-[color,filter] duration-200 ease-out ${state === 'running' ? 'text-cyan-400' :
+                                            state === 'paused' ? 'text-yellow-400' :
+                                                state === 'finished' ? 'text-red-500' : 'text-white'
+                                            }`}
+                                        animate={{
+                                            filter: state === 'running'
+                                                ? 'drop-shadow(0 0 15px rgba(34, 211, 238, 0.4))'
+                                                : state === 'paused'
+                                                    ? 'drop-shadow(0 0 10px rgba(250, 204, 21, 0.2))'
+                                                    : state === 'finished'
+                                                        ? 'drop-shadow(0 0 10px rgba(239, 68, 68, 0.3))'
+                                                        : 'none'
+                                        }}
+                                        transition={fadeMed}
+                                    >
+                                        {formatTime(timeLeft)}
+                                    </motion.div>
+                                    {timerMode === 'pomodoro' && (
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[10px] font-black tracking-[0.3em] text-zinc-600 uppercase">
+                                                {pomodoroPhase === 'work' ? 'Work' : pomodoroPhase === 'short_break' ? 'Break' : 'Long Break'}
+                                            </span>
+                                            <span className="text-[10px] text-zinc-600">•</span>
+                                            <span className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase">
+                                                Session {pomodoroSessionCount + 1} / {longBreakEvery}
+                                            </span>
+                                        </div>
+                                    )}
+                                </div>
                             )}
                         </div>
 
@@ -920,7 +1199,7 @@ const Island = () => {
                         {state === 'idle' && (
                             <div className="w-full flex justify-center">
                                 <span className="text-[11px] font-bold tracking-widest text-zinc-500 uppercase">
-                                    {timerMode === 'countdown' ? 'Set Timer' : 'Stopwatch'}
+                                    {timerMode === 'countdown' ? 'Set Timer' : timerMode === 'countup' ? 'Stopwatch' : 'Pomodoro'}
                                 </span>
                             </div>
                         )}
@@ -939,11 +1218,15 @@ const Island = () => {
                                                 ? 'text-red-500'
                                                 : 'text-zinc-500';
                                         
-                                        return timerMode === 'countdown' ? (
-                                            <Timer size={iconSize} className={iconClass} strokeWidth={2.5} />
-                                        ) : (
-                                            <Clock size={iconSize} className={iconClass} strokeWidth={2.5} />
-                                        );
+                                        if (timerMode === 'pomodoro') {
+                                            // Show different icon based on phase
+                                            const Icon = pomodoroPhase === 'work' ? Flame : Coffee;
+                                            return <Icon size={iconSize} className={iconClass} strokeWidth={2.5} />;
+                                        } else if (timerMode === 'countdown') {
+                                            return <Timer size={iconSize} className={iconClass} strokeWidth={2.5} />;
+                                        } else {
+                                            return <Clock size={iconSize} className={iconClass} strokeWidth={2.5} />;
+                                        }
                                     })()}
                                     <motion.span 
                                         className={`font-mono font-bold tracking-tighter text-base tabular-nums transition-colors duration-200 ${state === 'running' ? 'text-cyan-400' :

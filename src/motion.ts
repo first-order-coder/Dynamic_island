@@ -13,7 +13,7 @@ export const fadeMed  = { duration: 0.22, ease: easeApple };
 export const viewFade = {
   initial: { opacity: 0, scale: 0.99 },
   animate: { opacity: 1, scale: 1, transition: { duration: 0.18, ease: [0.22, 0.61, 0.36, 1] } },
-  exit:    { opacity: 0, scale: 0.99, transition: { duration: 0.16, ease: [0.22, 0.61, 0.36, 1] } },
+  exit:    { opacity: 0, transition: { duration: 0.16, ease: [0.22, 0.61, 0.36, 1] } },
 };
 
 // Small button press micro-interaction
