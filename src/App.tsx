@@ -105,6 +105,7 @@ const GAP_CONTROLS = 24;   // gap between reset and play/pause buttons
 
 const Island = () => {
     const [isExpanded, setIsExpanded] = useState(false);
+    const [isExiting, setIsExiting] = useState(false); // Exit-staging state for smooth transitions
     const [state, setState] = useState<TimerState>('idle');
     const [timeLeft, setTimeLeft] = useState(15 * 60);
     const [timerMode, setTimerMode] = useState<TimerMode>('countdown');
@@ -121,6 +122,9 @@ const Island = () => {
     const [finishGlowOn, setFinishGlowOn] = useState(false);
     const finishedFromCountdownRef = useRef(false);
     const finishScaleKey = useRef(0);
+
+    // Derived state: use effectiveExpanded for container sizing (delays morph until after content fade starts)
+    const effectiveExpanded = isExpanded && !isExiting;
 
     const timerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -201,11 +205,8 @@ const Island = () => {
         }
 
         setState('running');
-        // Only collapse for countdown to get it out of the way; 
-        // Keep expanded for stopwatch so user can see it start counting
-        if (timerMode === 'countdown') {
-            setIsExpanded(false);
-        }
+        // Restore old behavior: collapse for BOTH countdown and stopwatch on start
+        setIsExpanded(false);
     };
 
     const pauseTimer = () => {
@@ -289,8 +290,15 @@ const Island = () => {
         const onBlur = () => {
             // Ignore blur during cooldown to prevent forced collapse
             if (Date.now() - lastPinToggleAt.current < PIN_COOLDOWN_MS) return;
-            // Collapse on real BrowserWindow blur (outside click)
-            if (isExpanded && !alwaysExpanded) setIsExpanded(false);
+            // Collapse on real BrowserWindow blur (outside click) with smooth exit staging
+            if (isExpanded && !alwaysExpanded) {
+                setIsExiting(true);
+                // Delay container morph until after content fade starts (140ms matches exit duration)
+                setTimeout(() => {
+                    setIsExpanded(false);
+                    setIsExiting(false);
+                }, 140);
+            }
         };
 
         const onFocus = () => {
@@ -352,16 +360,16 @@ const Island = () => {
         return () => window.clearTimeout(t);
     }, [finishFxKey]);
 
-    // Compute current island size
-    const islandW = isExpanded
+    // Compute current island size using effectiveExpanded (delays container morph for smooth transition)
+    const islandW = effectiveExpanded
         ? ISLAND_W_EXPANDED
         : (state === 'running' || state === 'paused' || state === 'finished')
             ? ISLAND_W_ACTIVE
             : ISLAND_W_IDLE;
 
-    const islandH = isExpanded ? ISLAND_H_EXPANDED : ISLAND_H_COLLAPSED;
+    const islandH = effectiveExpanded ? ISLAND_H_EXPANDED : ISLAND_H_COLLAPSED;
 
-    const pad = isExpanded ? PAD_EXPANDED : PAD_COLLAPSED;
+    const pad = effectiveExpanded ? PAD_EXPANDED : PAD_COLLAPSED;
 
     const winW = islandW + pad * 2;
     const winH = islandH + pad * 2;
@@ -501,6 +509,7 @@ const Island = () => {
     const handleClick = () => {
         // Only expand if we didn't drag
         if (!hasMoved.current && !isExpanded) {
+            setIsExiting(false); // Reset exit state when expanding
             setIsExpanded(true);
             // Force focus so the next outside click triggers a real blur event
             window.electron?.focusWindow?.();
@@ -569,14 +578,13 @@ const Island = () => {
                 )}
 
                 <motion.div
-                    layout
                     className="relative overflow-hidden border border-white/5 select-none cursor-grab active:cursor-grabbing transition-[box-shadow,filter] duration-300 ease-out"
                     style={{
                         width: '100%',
                         height: '100%',
                         background: 'rgba(0, 0, 0, 1)',
                         transformOrigin: '50% 50%',
-                        boxShadow: isExpanded
+                        boxShadow: effectiveExpanded
                             ? '0 12px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05)'
                             : 'none' // no shadow/glow in collapsed mode
                     }}
@@ -584,7 +592,7 @@ const Island = () => {
                     onMouseLeave={handleMouseLeave}
                     initial={false}
                     animate={{
-                        borderRadius: isExpanded ? 48 : COLLAPSED_RADIUS,
+                        borderRadius: effectiveExpanded ? 48 : COLLAPSED_RADIUS,
                     }}
                     transition={{
                         borderRadius: springApple,
@@ -885,7 +893,24 @@ const Island = () => {
                         {(state === 'running' || state === 'paused' || state === 'finished') && (
                             <>
                                 <div className="flex items-center gap-3">
-                                    <ModeBadgeIcon mode={timerMode} state={state} allowGlow={false} />
+                                    {/* Icon without badge - just the icon itself */}
+                                    {(() => {
+                                        const iconSize = 17; // slightly bigger, still smaller than digits
+                                        const iconClass =
+                                            state === 'running'
+                                                ? 'text-cyan-400'
+                                                : state === 'paused'
+                                                ? 'text-yellow-400'
+                                                : state === 'finished'
+                                                ? 'text-red-500'
+                                                : 'text-zinc-500';
+                                        
+                                        return timerMode === 'countdown' ? (
+                                            <Timer size={iconSize} className={iconClass} strokeWidth={2.5} />
+                                        ) : (
+                                            <Clock size={iconSize} className={iconClass} strokeWidth={2.5} />
+                                        );
+                                    })()}
                                     <motion.span 
                                         className={`font-mono font-bold tracking-tighter text-base tabular-nums transition-colors duration-200 ${state === 'running' ? 'text-cyan-400' :
                                             state === 'paused' ? 'text-yellow-400' :
