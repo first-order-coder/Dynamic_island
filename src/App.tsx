@@ -38,6 +38,35 @@ const FinishRing = ({ triggerKey }: { triggerKey: number }) => {
     );
 };
 
+// Finish glow component (smooth fade-in/out for premium feel)
+const FinishGlow = ({ visible }: { visible: boolean }) => {
+    return (
+        <AnimatePresence>
+            {visible && (
+                <motion.div
+                    key="finish-glow"
+                    className="absolute inset-0 rounded-[inherit] pointer-events-none"
+                    // Keep the glow shape constant; animate only opacity for smoothness
+                    style={{
+                        boxShadow:
+                            '0 0 0 1px rgba(239,68,68,0.55), 0 0 12px rgba(239,68,68,0.35)',
+                    }}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{
+                        opacity: {
+                            // slightly slower fade-out feels more premium
+                            duration: 0.35,
+                            ease: easePremium,
+                        },
+                    }}
+                />
+            )}
+        </AnimatePresence>
+    );
+};
+
 const ModeBadgeIcon = ({ mode, state, allowGlow = false }: { mode: TimerMode; state: TimerState; allowGlow?: boolean }) => {
     const isRunning = state === 'running';
     const isPaused = state === 'paused';
@@ -106,6 +135,8 @@ const GAP_CONTROLS = 24;   // gap between reset and play/pause buttons
 const Island = () => {
     const [isExpanded, setIsExpanded] = useState(false);
     const [isExiting, setIsExiting] = useState(false); // Exit-staging state for smooth transitions
+    const [isCollapsing, setIsCollapsing] = useState(false); // Collapse staging state to prevent header flash
+    const COLLAPSE_EXIT_MS = 160; // Duration for smooth exit before collapsing
     const [state, setState] = useState<TimerState>('idle');
     const [timeLeft, setTimeLeft] = useState(15 * 60);
     const [timerMode, setTimerMode] = useState<TimerMode>('countdown');
@@ -124,7 +155,22 @@ const Island = () => {
     const finishScaleKey = useRef(0);
 
     // Derived state: use effectiveExpanded for container sizing (delays morph until after content fade starts)
-    const effectiveExpanded = isExpanded && !isExiting;
+    // Use isCollapsing to prevent header flash during collapse
+    const effectiveExpanded = isExpanded && !isExiting && !isCollapsing;
+    
+    // Function to request collapse with smooth staging
+    const requestCollapse = () => {
+        // If already collapsed or already collapsing, no-op
+        if (!isExpanded || isCollapsing) return;
+        
+        // Stage exit first to start fade-out animation
+        setIsCollapsing(true);
+        
+        window.setTimeout(() => {
+            setIsExpanded(false);
+            setIsCollapsing(false);
+        }, COLLAPSE_EXIT_MS);
+    };
 
     const timerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -293,11 +339,8 @@ const Island = () => {
             // Collapse on real BrowserWindow blur (outside click) with smooth exit staging
             if (isExpanded && !alwaysExpanded) {
                 setIsExiting(true);
-                // Delay container morph until after content fade starts (140ms matches exit duration)
-                setTimeout(() => {
-                    setIsExpanded(false);
-                    setIsExiting(false);
-                }, 140);
+                // Use requestCollapse for consistent staging
+                requestCollapse();
             }
         };
 
@@ -356,7 +399,8 @@ const Island = () => {
         if (!finishedFromCountdownRef.current) return;
 
         setFinishGlowOn(true);
-        const t = window.setTimeout(() => setFinishGlowOn(false), FINISH_GLOW_DURATION);
+        // Keep glow visible ~650ms total (includes fade-in/out for smooth animation)
+        const t = window.setTimeout(() => setFinishGlowOn(false), 650);
         return () => window.clearTimeout(t);
     }, [finishFxKey]);
 
@@ -606,27 +650,17 @@ const Island = () => {
                 {/* Background Base */}
                 <div className="absolute inset-0 bg-black pointer-events-none" />
 
-                {/* Finish Glow Ping - tight red edge halo overlay */}
-                <AnimatePresence>
-                    {finishGlowOn && (
-                        <motion.div
-                            className="absolute inset-0 rounded-[inherit] pointer-events-none"
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            transition={{ duration: 0.22, ease: easePremium }}
-                            style={{
-                                boxShadow: '0 0 0 1px rgba(239,68,68,0.55), 0 0 12px rgba(239,68,68,0.35)',
-                            }}
-                        />
-                    )}
-                </AnimatePresence>
+                {/* Finish Glow Ping - tight red edge halo overlay with smooth fade */}
+                <FinishGlow visible={finishGlowOn} />
 
             {/* CONTENT VIEWS - Single AnimatePresence with mode="wait" for smooth transitions */}
+            {/* Use isExpanded (not effectiveExpanded) so expanded content stays visible during exit animation */}
+            {/* When isCollapsing is true, expanded view exits; after timeout, isExpanded becomes false and collapsed enters */}
+            {/* Change key when collapsing to force exit animation */}
             <AnimatePresence mode="wait" initial={false}>
-                {isExpanded ? (
+                {(isExpanded || isCollapsing) ? (
                     <motion.div
-                        key="expanded"
+                        key={isCollapsing ? "expanded-exiting" : "expanded"}
                         className="absolute inset-0 flex flex-col pointer-events-auto"
                         style={{ padding: `${PAD_OUTER}px` }}
                         variants={viewFade}
