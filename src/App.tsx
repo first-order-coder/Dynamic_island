@@ -9,6 +9,35 @@ const DEBUG = false;
 type TimerState = 'idle' | 'running' | 'paused' | 'finished';
 type TimerMode = 'countdown' | 'countup';
 
+// Finish animation constants (single source of truth)
+const easePremium: [number, number, number, number] = [0.22, 0.61, 0.36, 1]; // iOS-ish
+const FINISH_POP_SCALE = 1.045;     // slightly bigger but still subtle (was 1.03)
+const FINISH_POP_DURATION = 0.24;   // slower/smoother (was ~0.16)
+const FINISH_RING_DURATION = 0.85;  // slower (was ~0.65)
+const FINISH_GLOW_DURATION = 520;   // ms (was ~300)
+
+// Finish ring animation component (one-shot pulse ring - subtle)
+const FinishRing = ({ triggerKey }: { triggerKey: number }) => {
+    if (triggerKey <= 0) return null;
+    return (
+        <motion.div
+            key={`ring-${triggerKey}`}
+            className="absolute inset-0 flex items-center justify-center pointer-events-none"
+            initial={{ opacity: 0.85 }}
+            animate={{ opacity: 0 }}
+            transition={{ duration: FINISH_RING_DURATION, ease: easePremium }}
+        >
+            <motion.div
+                className="rounded-full border border-white/18"
+                style={{ width: '108%', height: '108%' }}  // subtle size
+                initial={{ scale: 0.985, opacity: 0.75 }}
+                animate={{ scale: 1.16, opacity: 0 }}
+                transition={{ duration: FINISH_RING_DURATION, ease: easePremium }}
+            />
+        </motion.div>
+    );
+};
+
 const ModeBadgeIcon = ({ mode, state, allowGlow = false }: { mode: TimerMode; state: TimerState; allowGlow?: boolean }) => {
     const isRunning = state === 'running';
     const isPaused = state === 'paused';
@@ -86,6 +115,12 @@ const Island = () => {
     // New Features State
     const [isPinned, setIsPinned] = useState(true);
     const [alwaysExpanded, setAlwaysExpanded] = useState(false);
+
+    // Finish animation trigger state
+    const [finishFxKey, setFinishFxKey] = useState(0);
+    const [finishGlowOn, setFinishGlowOn] = useState(false);
+    const finishedFromCountdownRef = useRef(false);
+    const finishScaleKey = useRef(0);
 
     const timerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -182,6 +217,8 @@ const Island = () => {
         setState('idle');
         if (timerMode === 'countup') setTimeLeft(0);
         if (timerRef.current) clearInterval(timerRef.current);
+        finishedFromCountdownRef.current = false;
+        finishScaleKey.current = 0;
     };
 
     const playBeep = () => {
@@ -212,8 +249,11 @@ const Island = () => {
 
                         if (remaining <= 0) {
                             clearInterval(timerRef.current!);
+                            finishedFromCountdownRef.current = true;
+                            setFinishFxKey((k) => k + 1);
+                            finishScaleKey.current += 1;
                             setState('finished');
-                            setIsExpanded(true);
+                            // DO NOT auto-expand on finish - keep current expanded state
                             playBeep();
                             return 0;
                         }
@@ -301,6 +341,16 @@ const Island = () => {
         }
         // Main process handles collapsed + pinned click-through automatically via polling
     }, [isExpanded]);
+
+    // Finish glow ping effect (one-shot, tight red edge halo)
+    useEffect(() => {
+        if (finishFxKey === 0) return;
+        if (!finishedFromCountdownRef.current) return;
+
+        setFinishGlowOn(true);
+        const t = window.setTimeout(() => setFinishGlowOn(false), FINISH_GLOW_DURATION);
+        return () => window.clearTimeout(t);
+    }, [finishFxKey]);
 
     // Compute current island size
     const islandW = isExpanded
@@ -485,6 +535,8 @@ const Island = () => {
         return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     };
 
+    const shouldFinishFx = state === 'finished' && finishedFromCountdownRef.current;
+
     return (
         <div 
             className="w-full h-full flex items-start justify-center" 
@@ -496,33 +548,71 @@ const Island = () => {
                 } : {})
             }}
         >
+            {/* Outer wrapper for FinishRing (non-overflow so ring doesn't clip) */}
             <motion.div
-                layout
-                className="relative overflow-hidden border border-white/5 select-none cursor-grab active:cursor-grabbing transition-[box-shadow,filter] duration-200 ease-out"
-                style={{
-                    background: 'rgba(0, 0, 0, 1)',
-                    transformOrigin: '50% 50%',
-                    boxShadow: isExpanded
-                        ? '0 12px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05)'
-                        : 'none'  // no shadow/glow in collapsed mode
-                }}
-                onMouseEnter={handleMouseEnter}
-                onMouseLeave={handleMouseLeave}
-                initial={false}
+                className="relative"
+                style={{ width: islandW, height: islandH }}
                 animate={{
                     width: islandW,
                     height: islandH,
-                    borderRadius: isExpanded ? 48 : COLLAPSED_RADIUS
+                    scale: shouldFinishFx && finishFxKey > 0 ? [1, FINISH_POP_SCALE, 1] : 1,
                 }}
-                transition={springApple}
-                onPointerDown={onPointerDown}
-                onPointerMove={onPointerMove}
-                onPointerUp={endPointerDrag}
-                onPointerCancel={endPointerDrag}
-                onClick={handleClick}
+                transition={{
+                    width: springApple,
+                    height: springApple,
+                    scale: shouldFinishFx ? { duration: FINISH_POP_DURATION, ease: easePremium } : { duration: 0.08 },
+                }}
             >
-            {/* Background Base */}
-            <div className="absolute inset-0 bg-black pointer-events-none" />
+                {/* Finish Ring Animation - outside pill container so it doesn't clip */}
+                {shouldFinishFx && (
+                    <FinishRing triggerKey={finishFxKey} />
+                )}
+
+                <motion.div
+                    layout
+                    className="relative overflow-hidden border border-white/5 select-none cursor-grab active:cursor-grabbing transition-[box-shadow,filter] duration-300 ease-out"
+                    style={{
+                        width: '100%',
+                        height: '100%',
+                        background: 'rgba(0, 0, 0, 1)',
+                        transformOrigin: '50% 50%',
+                        boxShadow: isExpanded
+                            ? '0 12px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05)'
+                            : 'none' // no shadow/glow in collapsed mode
+                    }}
+                    onMouseEnter={handleMouseEnter}
+                    onMouseLeave={handleMouseLeave}
+                    initial={false}
+                    animate={{
+                        borderRadius: isExpanded ? 48 : COLLAPSED_RADIUS,
+                    }}
+                    transition={{
+                        borderRadius: springApple,
+                    }}
+                    onPointerDown={onPointerDown}
+                    onPointerMove={onPointerMove}
+                    onPointerUp={endPointerDrag}
+                    onPointerCancel={endPointerDrag}
+                    onClick={handleClick}
+                >
+                {/* Background Base */}
+                <div className="absolute inset-0 bg-black pointer-events-none" />
+
+                {/* Finish Glow Ping - tight red edge halo overlay */}
+                <AnimatePresence>
+                    {finishGlowOn && (
+                        <motion.div
+                            className="absolute inset-0 rounded-[inherit] pointer-events-none"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            transition={{ duration: 0.22, ease: easePremium }}
+                            style={{
+                                boxShadow: '0 0 0 1px rgba(239,68,68,0.55), 0 0 12px rgba(239,68,68,0.35)',
+                            }}
+                        />
+                    )}
+                </AnimatePresence>
 
             {/* CONTENT VIEWS - Single AnimatePresence with mode="wait" for smooth transitions */}
             <AnimatePresence mode="wait" initial={false}>
@@ -826,7 +916,8 @@ const Island = () => {
                     </motion.div>
                 )}
             </AnimatePresence>
-        </motion.div>
+                </motion.div>
+            </motion.div>
         </div>
     );
 };
