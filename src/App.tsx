@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Play, Pause, RefreshCw, Timer, Clock, Pin, PinOff, Maximize2, Minimize2, LocateFixed } from 'lucide-react';
+import { Play, Pause, RefreshCw, Timer, Clock, Pin, PinOff, LocateFixed, Power } from 'lucide-react';
 import { springApple, viewFade, easeApple, pressTap, hoverLift, fadeMed } from './motion';
 
 // DEBUG mode - set to false to remove red window outline
@@ -459,29 +459,23 @@ const Island = () => {
 
     const handleRecenter = async (e: React.MouseEvent) => {
         e.stopPropagation();
-        console.log('[recenter] clicked');
+        console.log('[UI] recenter clicked');
 
-        if (!window.electron) {
-            console.error('[recenter] window.electron missing');
-            return;
-        }
-        if (typeof (window.electron as any).recenterWindow !== 'function') {
-            console.error('[recenter] recenterWindow API missing on preload', window.electron);
+        const api = window.electron as any;
+        if (!api) return console.error('[UI] window.electron missing');
+        console.log('[UI] electron keys:', Object.keys(api));
+
+        if (typeof api.recenterWindow !== 'function') {
+            console.error('[UI] recenterWindow missing from preload');
             return;
         }
 
         try {
-            // Ensure clickable
-            await window.electron.setIgnoreMouseEvents(false);
-            
-            // Call recenter
-            const result = await (window.electron as any).recenterWindow();
-            console.log('[recenter] IPC result:', result);
-            
-            // Optional: focus window for reliability
-            await window.electron.focusWindow?.();
+            await api.setIgnoreMouseEvents?.(false); // ensure interactive during click
+            const res = await api.recenterWindow();
+            console.log('[UI] recenter IPC response:', res);
         } catch (err) {
-            console.error('[recenter] IPC failed:', err);
+            console.error('[UI] recenter error:', err);
         }
     };
 
@@ -580,21 +574,22 @@ const Island = () => {
                                     {isPinned ? <Pin size={14} fill="currentColor" /> : <PinOff size={14} />}
                                 </motion.button>
 
-                                {/* Always Expanded Toggle */}
+                                {/* Quit App */}
                                 <motion.button
                                     onClick={(e) => {
                                         e.stopPropagation();
-                                        setAlwaysExpanded(!alwaysExpanded);
+                                        window.electron?.setIgnoreMouseEvents(false); // ensure interactivity
+                                        window.electron?.quitApp?.();
                                     }}
-                                    title={alwaysExpanded ? "Disable always expanded" : "Keep expanded"}
-                                    className={`rounded-full flex items-center justify-center transition-colors cursor-pointer ${alwaysExpanded ? 'text-zinc-200 bg-white/10' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
-                                        }`}
+                                    title="Quit"
+                                    className="rounded-full flex items-center justify-center transition-colors cursor-pointer relative z-50 text-zinc-500 hover:text-red-300 hover:bg-red-500/10"
                                     style={{ width: `${BTN_SIZE}px`, height: `${BTN_SIZE}px` }}
+                                    data-no-drag="true"
                                     whileHover={hoverLift}
                                     whileTap={pressTap}
                                     transition={{ duration: 0.12, ease: easeApple }}
                                 >
-                                    {alwaysExpanded ? <Maximize2 size={14} /> : <Minimize2 size={14} />}
+                                    <Power size={14} />
                                 </motion.button>
 
                                 {/* Divider */}

@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "concurrently \"npm run dev:react\" \"npm run dev:electron\"",
+    "dev": "cross-env DEV_PORT=5174 concurrently \"npm run dev:react\" \"npm run dev:electron\"",
     "dev:react": "vite",
-    "dev:electron": "wait-on tcp:5173 && tsc -p electron/tsconfig.json && electron .",
+    "dev:electron": "cross-env node wait-port.js && tsc -p electron/tsconfig.json && electron .",
     "build": "tsc && vite build && tsc -p electron/tsconfig.json",
     "preview": "vite preview"
   },

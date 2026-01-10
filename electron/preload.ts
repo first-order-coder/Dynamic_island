@@ -28,8 +28,11 @@ const exposedObject = {
     
     // Recenter window
     recenterWindow: () => ipcRenderer.invoke('recenter-window'),
+    
+    // Quit app
+    quitApp: () => ipcRenderer.invoke('quit-app'),
 };
 
-console.log('[preload] electron API keys:', Object.keys(exposedObject));
+console.log('[preload] electron keys exposed:', Object.keys(exposedObject));
 
 contextBridge.exposeInMainWorld('electron', exposedObject);

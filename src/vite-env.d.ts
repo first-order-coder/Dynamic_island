@@ -11,6 +11,7 @@ interface ElectronAPI {
     overlaySetMode: (expanded: boolean, pinned: boolean) => Promise<void>;
     overlaySetInteractiveRect: (rect: { x: number; y: number; width: number; height: number }) => Promise<void>;
     recenterWindow: () => Promise<void>;
+    quitApp: () => Promise<void>;
 }
 
 interface Window {

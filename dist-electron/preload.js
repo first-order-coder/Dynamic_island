@@ -22,7 +22,9 @@ const exposedObject = {
     overlaySetInteractiveRect: (rect) => electron_1.ipcRenderer.invoke('overlay-set-interactive-rect', rect),
     // Recenter window
     recenterWindow: () => electron_1.ipcRenderer.invoke('recenter-window'),
+    // Quit app
+    quitApp: () => electron_1.ipcRenderer.invoke('quit-app'),
 };
-console.log('[preload] electron API keys:', Object.keys(exposedObject));
+console.log('[preload] electron keys exposed:', Object.keys(exposedObject));
 electron_1.contextBridge.exposeInMainWorld('electron', exposedObject);
 //# sourceMappingURL=preload.js.map

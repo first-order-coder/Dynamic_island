@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, screen, globalShortcut } from 'electron';
 import path from 'path';
 
 // Disable hardware acceleration to prevent GPU crashes with transparent windows
@@ -58,6 +58,38 @@ function stopPoll() {
         clearInterval(pollTimer);
         pollTimer = null;
     }
+}
+
+// Recenter window helper function (main process)
+function recenterMainWindow() {
+    if (!mainWindow) return { ok: false, reason: 'mainWindow is null' };
+
+    const b = mainWindow.getBounds();
+    const display = screen.getDisplayMatching(b);
+    const { workArea } = display;
+
+    const TOP_MARGIN = 12;
+
+    let x = Math.round(workArea.x + (workArea.width - b.width) / 2);
+    let y = Math.round(workArea.y + TOP_MARGIN);
+
+    // Clamp inside work area
+    x = Math.min(Math.max(x, workArea.x), workArea.x + workArea.width - b.width);
+    y = Math.min(Math.max(y, workArea.y), workArea.y + workArea.height - b.height);
+
+    console.log('[recenter] from', b, 'to', { x, y }, 'workArea', workArea);
+
+    // Ensure it can receive input during move
+    mainWindow.setIgnoreMouseEvents(false);
+
+    // Move reliably
+    mainWindow.setBounds({ x, y, width: b.width, height: b.height }, false);
+
+    // Keep visible and on top
+    mainWindow.show();
+    mainWindow.moveTop();
+
+    return { ok: true, bounds: mainWindow.getBounds() };
 }
 
 function pointInRect(p: { x: number; y: number }, b: { x: number; y: number; width: number; height: number }) {
@@ -132,7 +164,9 @@ const createWindow = () => {
         skipTaskbar: true, // Optional: keep it less intrusive
     });
 
-    const devUrl = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
+    // Use VITE_DEV_SERVER_URL if provided, otherwise construct from DEV_PORT (default 5174)
+    const devPort = process.env.DEV_PORT || '5174';
+    const devUrl = process.env.VITE_DEV_SERVER_URL || `http://localhost:${devPort}`;
 
     if (!app.isPackaged) {
         mainWindow.loadURL(devUrl);
@@ -176,7 +210,15 @@ if (!gotTheLock) {
         }
     });
 
-    app.on('ready', createWindow);
+    app.on('ready', () => {
+        createWindow();
+
+        // TEMP DEV TEST: recenter via Ctrl+Alt+R
+        globalShortcut.register('Control+Alt+R', () => {
+            console.log('[shortcut] Ctrl+Alt+R pressed');
+            recenterMainWindow();
+        });
+    });
 }
 
 app.on('window-all-closed', () => {
@@ -191,6 +233,10 @@ app.on('activate', () => {
     }
 });
 
+app.on('will-quit', () => {
+    globalShortcut.unregisterAll();
+});
+
 // IPC Handlers
 ipcMain.handle('resize-window', (_event, { width, height }) => {
     if (!mainWindow) return;
@@ -202,16 +248,16 @@ ipcMain.handle('resize-window', (_event, { width, height }) => {
     const nextW = Math.round(width);
     const nextH = Math.round(height);
 
-    // Preserve the current center X so resizing feels stable even after dragging
     const centerX = b.x + b.width / 2;
     let x = Math.round(centerX - nextW / 2);
     let y = b.y;
 
-    // Clamp window inside work area
     x = Math.min(Math.max(x, workArea.x), workArea.x + workArea.width - nextW);
     y = Math.min(Math.max(y, workArea.y), workArea.y + workArea.height - nextH);
 
     mainWindow.setBounds({ x, y, width: nextW, height: nextH }, false);
+
+    return { ok: true, bounds: mainWindow.getBounds() };
 });
 
 ipcMain.handle('move-window', (event, { deltaX, deltaY }) => {
@@ -320,35 +366,10 @@ ipcMain.handle('overlay-set-interactive-rect', (_event, rect: { x: number; y: nu
 });
 
 ipcMain.handle('recenter-window', () => {
-    if (!mainWindow) return { ok: false, reason: 'no-window' };
+    return recenterMainWindow();
+});
 
-    const b = mainWindow.getBounds();
-    const display = screen.getDisplayMatching(b);
-    const { workArea } = display;
-
-    const TOP_MARGIN = 12;
-
-    // top-center of the work area, preserve current size
-    let x = Math.round(workArea.x + (workArea.width - b.width) / 2);
-    let y = Math.round(workArea.y + TOP_MARGIN);
-
-    // clamp (just in case)
-    x = Math.min(Math.max(x, workArea.x), workArea.x + workArea.width - b.width);
-    y = Math.min(Math.max(y, workArea.y), workArea.y + workArea.height - b.height);
-
-    console.log('[ipc recenter-window] from', b, 'to', { x, y }, 'workArea', workArea);
-
-    // Force interactivity while moving (prevents click-through controllers from interfering)
-    mainWindow.setIgnoreMouseEvents(false);
-    setIgnoring(false); // Also update selective click-through state
-
-    // Move window (use setBounds for reliability)
-    mainWindow.setBounds({ x, y, width: b.width, height: b.height }, false);
-
-    // Make sure it is visible
-    mainWindow.showInactive();
-
-    // Return new bounds to renderer for confirmation
-    const nb = mainWindow.getBounds();
-    return { ok: true, bounds: nb };
+ipcMain.handle('quit-app', () => {
+    // Ensure a clean quit
+    app.quit();
 });

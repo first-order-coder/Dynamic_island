@@ -55,6 +55,29 @@ function stopPoll() {
         pollTimer = null;
     }
 }
+// Recenter window helper function (main process)
+function recenterMainWindow() {
+    if (!mainWindow)
+        return { ok: false, reason: 'mainWindow is null' };
+    const b = mainWindow.getBounds();
+    const display = electron_1.screen.getDisplayMatching(b);
+    const { workArea } = display;
+    const TOP_MARGIN = 12;
+    let x = Math.round(workArea.x + (workArea.width - b.width) / 2);
+    let y = Math.round(workArea.y + TOP_MARGIN);
+    // Clamp inside work area
+    x = Math.min(Math.max(x, workArea.x), workArea.x + workArea.width - b.width);
+    y = Math.min(Math.max(y, workArea.y), workArea.y + workArea.height - b.height);
+    console.log('[recenter] from', b, 'to', { x, y }, 'workArea', workArea);
+    // Ensure it can receive input during move
+    mainWindow.setIgnoreMouseEvents(false);
+    // Move reliably
+    mainWindow.setBounds({ x, y, width: b.width, height: b.height }, false);
+    // Keep visible and on top
+    mainWindow.show();
+    mainWindow.moveTop();
+    return { ok: true, bounds: mainWindow.getBounds() };
+}
 function pointInRect(p, b) {
     return p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height;
 }
@@ -118,7 +141,9 @@ const createWindow = () => {
         },
         skipTaskbar: true, // Optional: keep it less intrusive
     });
-    const devUrl = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
+    // Use VITE_DEV_SERVER_URL if provided, otherwise construct from DEV_PORT (default 5174)
+    const devPort = process.env.DEV_PORT || '5174';
+    const devUrl = process.env.VITE_DEV_SERVER_URL || `http://localhost:${devPort}`;
     if (!electron_1.app.isPackaged) {
         mainWindow.loadURL(devUrl);
         // mainWindow.webContents.openDevTools({ mode: 'detach' });
@@ -157,7 +182,14 @@ else {
             mainWindow.focus();
         }
     });
-    electron_1.app.on('ready', createWindow);
+    electron_1.app.on('ready', () => {
+        createWindow();
+        // TEMP DEV TEST: recenter via Ctrl+Alt+R
+        electron_1.globalShortcut.register('Control+Alt+R', () => {
+            console.log('[shortcut] Ctrl+Alt+R pressed');
+            recenterMainWindow();
+        });
+    });
 }
 electron_1.app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
@@ -169,6 +201,9 @@ electron_1.app.on('activate', () => {
         createWindow();
     }
 });
+electron_1.app.on('will-quit', () => {
+    electron_1.globalShortcut.unregisterAll();
+});
 // IPC Handlers
 electron_1.ipcMain.handle('resize-window', (_event, { width, height }) => {
     if (!mainWindow)
@@ -178,14 +213,13 @@ electron_1.ipcMain.handle('resize-window', (_event, { width, height }) => {
     const { workArea } = display;
     const nextW = Math.round(width);
     const nextH = Math.round(height);
-    // Preserve the current center X so resizing feels stable even after dragging
     const centerX = b.x + b.width / 2;
     let x = Math.round(centerX - nextW / 2);
     let y = b.y;
-    // Clamp window inside work area
     x = Math.min(Math.max(x, workArea.x), workArea.x + workArea.width - nextW);
     y = Math.min(Math.max(y, workArea.y), workArea.y + workArea.height - nextH);
     mainWindow.setBounds({ x, y, width: nextW, height: nextH }, false);
+    return { ok: true, bounds: mainWindow.getBounds() };
 });
 electron_1.ipcMain.handle('move-window', (event, { deltaX, deltaY }) => {
     if (!mainWindow)
@@ -275,28 +309,10 @@ electron_1.ipcMain.handle('overlay-set-interactive-rect', (_event, rect) => {
     startPoll();
 });
 electron_1.ipcMain.handle('recenter-window', () => {
-    if (!mainWindow)
-        return { ok: false, reason: 'no-window' };
-    const b = mainWindow.getBounds();
-    const display = electron_1.screen.getDisplayMatching(b);
-    const { workArea } = display;
-    const TOP_MARGIN = 12;
-    // top-center of the work area, preserve current size
-    let x = Math.round(workArea.x + (workArea.width - b.width) / 2);
-    let y = Math.round(workArea.y + TOP_MARGIN);
-    // clamp (just in case)
-    x = Math.min(Math.max(x, workArea.x), workArea.x + workArea.width - b.width);
-    y = Math.min(Math.max(y, workArea.y), workArea.y + workArea.height - b.height);
-    console.log('[ipc recenter-window] from', b, 'to', { x, y }, 'workArea', workArea);
-    // Force interactivity while moving (prevents click-through controllers from interfering)
-    mainWindow.setIgnoreMouseEvents(false);
-    setIgnoring(false); // Also update selective click-through state
-    // Move window (use setBounds for reliability)
-    mainWindow.setBounds({ x, y, width: b.width, height: b.height }, false);
-    // Make sure it is visible
-    mainWindow.showInactive();
-    // Return new bounds to renderer for confirmation
-    const nb = mainWindow.getBounds();
-    return { ok: true, bounds: nb };
+    return recenterMainWindow();
+});
+electron_1.ipcMain.handle('quit-app', () => {
+    // Ensure a clean quit
+    electron_1.app.quit();
 });
 //# sourceMappingURL=main.js.map
