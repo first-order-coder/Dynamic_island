@@ -113,7 +113,9 @@ const ModeBadgeIcon = ({ mode, state, allowGlow = false }: { mode: TimerMode; st
 
 // Island size constants - single source of truth
 const ISLAND_W_EXPANDED = 400;
-const ISLAND_H_EXPANDED = 380;
+const EXPANDED_H_DEFAULT = 380;        // non-pomodoro modes
+const EXPANDED_H_POMO_IDLE = 600;      // pomodoro idle/settings
+const EXPANDED_H_POMO_ACTIVE = 420;    // pomodoro running/paused/finished
 
 const ISLAND_H_COLLAPSED = 44;              // increased from 34 for premium spacing
 const ISLAND_W_IDLE = 200;                  // increased from 150
@@ -132,6 +134,7 @@ const HEADER_H = 28;       // header row height alignment target
 const BTN_SIZE = 30;       // top-right icon button hit area (same for all)
 const GAP_MODE_TIME = 18;  // gap between mode toggle and time display
 const GAP_CONTROLS = 24;   // gap between reset and play/pause buttons
+const FOOTER_SAFE_PAD = 120; // enough to clear the big play button + spacing
 
 const Island = () => {
     const [isExpanded, setIsExpanded] = useState(false);
@@ -278,7 +281,7 @@ const Island = () => {
 
         setState('running');
         // Restore old behavior: collapse for BOTH countdown and stopwatch on start
-        setIsExpanded(false);
+            setIsExpanded(false);
     };
 
     const pauseTimer = () => {
@@ -377,10 +380,10 @@ const Island = () => {
                 const now = Date.now();
 
                 if (timerMode === 'countdown' || timerMode === 'pomodoro') {
-                    const remaining = Math.max(0, Math.ceil((endTimeRef.current - now) / 1000));
+                        const remaining = Math.max(0, Math.ceil((endTimeRef.current - now) / 1000));
                     setTimeLeft(remaining);
 
-                    if (remaining <= 0) {
+                        if (remaining <= 0) {
                         finishedFromCountdownRef.current = true;
                         setFinishFxKey((k) => k + 1);
                         finishScaleKey.current += 1;
@@ -405,11 +408,11 @@ const Island = () => {
                             setTimeLeft(0);
                         }
                     }
-                } else {
-                    // Countup - use max to prevent negative jitter on first tick
-                    const elapsed = Math.max(0, Math.floor((now - startTimeRef.current) / 1000));
+                    } else {
+                        // Countup - use max to prevent negative jitter on first tick
+                        const elapsed = Math.max(0, Math.floor((now - startTimeRef.current) / 1000));
                     setTimeLeft(elapsed);
-                }
+                    }
             }, 100); // Check more frequently for smoothness, though updating state effectively per second change
         }
         return () => {
@@ -524,7 +527,13 @@ const Island = () => {
             ? ISLAND_W_ACTIVE
             : ISLAND_W_IDLE;
 
-    const islandH = isSizeExpanded ? ISLAND_H_EXPANDED : ISLAND_H_COLLAPSED;
+    // Compute expanded height based on mode and state
+    const expandedH =
+        timerMode === 'pomodoro'
+            ? (state === 'idle' ? EXPANDED_H_POMO_IDLE : EXPANDED_H_POMO_ACTIVE)
+            : EXPANDED_H_DEFAULT;
+
+    const islandH = isSizeExpanded ? expandedH : ISLAND_H_COLLAPSED;
 
     const pad = isSizeExpanded ? PAD_EXPANDED : PAD_COLLAPSED;
 
@@ -619,7 +628,7 @@ const Island = () => {
     };
 
     const onPointerMove = (e: React.PointerEvent) => {
-        if (!isDragging.current) return;
+            if (!isDragging.current) return;
         if (dragPointerId.current !== e.pointerId) return;
 
         const dx = e.screenX - lastScreenPos.current.x;
@@ -631,8 +640,8 @@ const Island = () => {
         totalDrag.current.x += dx;
         totalDrag.current.y += dy;
         if (Math.abs(totalDrag.current.x) > 1 || Math.abs(totalDrag.current.y) > 1) {
-            hasMoved.current = true;
-        }
+                hasMoved.current = true;
+            }
 
         // Accumulate delta and schedule rAF flush for smooth 60fps updates
         pendingDelta.current.x += dx;
@@ -715,7 +724,7 @@ const Island = () => {
             }}
         >
             {/* Outer wrapper for FinishRing (non-overflow so ring doesn't clip) */}
-            <motion.div
+        <motion.div
                 className="relative"
                 style={{ width: islandW, height: islandH }}
                 animate={{
@@ -736,19 +745,19 @@ const Island = () => {
 
                 <motion.div
                     className="relative overflow-hidden border border-white/5 select-none cursor-grab active:cursor-grabbing transition-[box-shadow,filter] duration-300 ease-out"
-                    style={{
+            style={{
                         width: '100%',
                         height: '100%',
-                        background: 'rgba(0, 0, 0, 1)',
+                background: 'rgba(0, 0, 0, 1)',
                         transformOrigin: '50% 50%',
                         boxShadow: isSizeExpanded
                             ? '0 12px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05)'
                             : 'none' // no shadow/glow in collapsed mode
-                    }}
-                    onMouseEnter={handleMouseEnter}
-                    onMouseLeave={handleMouseLeave}
-                    initial={false}
-                    animate={{
+            }}
+            onMouseEnter={handleMouseEnter}
+            onMouseLeave={handleMouseLeave}
+            initial={false}
+            animate={{
                         borderRadius: isSizeExpanded ? 48 : COLLAPSED_RADIUS,
                     }}
                     transition={{
@@ -758,10 +767,10 @@ const Island = () => {
                     onPointerMove={onPointerMove}
                     onPointerUp={endPointerDrag}
                     onPointerCancel={endPointerDrag}
-                    onClick={handleClick}
-                >
-                {/* Background Base */}
-                <div className="absolute inset-0 bg-black pointer-events-none" />
+            onClick={handleClick}
+        >
+            {/* Background Base */}
+            <div className="absolute inset-0 bg-black pointer-events-none" />
 
                 {/* Finish Glow Ping - tight red edge halo overlay with smooth fade */}
                 <FinishGlow visible={finishGlowOn} />
@@ -780,7 +789,7 @@ const Island = () => {
                 {isExpanded ? (
                     <motion.div
                         key="expanded"
-                        className="absolute inset-0 w-full min-w-0 flex flex-col pointer-events-auto"
+                        className="absolute inset-0 w-full min-w-0 min-h-0 flex flex-col pointer-events-auto"
                         style={{ padding: `${PAD_OUTER}px` }}
                         variants={viewFade}
                         initial="initial"
@@ -798,29 +807,29 @@ const Island = () => {
                                 className="flex justify-between items-center"
                                 style={{ height: `${HEADER_H}px` }}
                             >
-                                {/* Left Side: Mode Indicator */}
+                            {/* Left Side: Mode Indicator */}
                                 <div className="flex items-center">
                                     <span className={`rounded-full px-2 py-0.5 text-[9px] font-black tracking-[0.15em] border uppercase transition-[background-color,color,border-color] duration-200 ${state === 'running' ? 'bg-cyan-400/10 text-cyan-400 border-cyan-400/20' :
-                                        state === 'paused' ? 'bg-yellow-400/10 text-yellow-400 border-yellow-400/20' :
-                                            'bg-white/10 text-white border-white/20'
-                                        }`}>
-                                        {state === 'idle' ? timerMode : state}
-                                    </span>
-                                </div>
+                                    state === 'paused' ? 'bg-yellow-400/10 text-yellow-400 border-yellow-400/20' :
+                                        'bg-white/10 text-white border-white/20'
+                                    }`}>
+                                    {state === 'idle' ? timerMode : state}
+                                </span>
+                            </div>
 
-                                {/* Right Side: Controls */}
+                            {/* Right Side: Controls */}
                                 <div 
                                     data-no-drag="true" 
                                     className="flex items-center"
                                     style={{ gap: `${GAP_INLINE}px` }}
                                 >
-                                    {/* Pin Toggle */}
+                                {/* Pin Toggle */}
                                     <motion.button
                                         onClick={(e) => {
                                             e.stopPropagation();
                                             togglePin();
                                         }}
-                                        title={isPinned ? "Unpin from top" : "Pin to top"}
+                                    title={isPinned ? "Unpin from top" : "Pin to top"}
                                         className={`rounded-full flex items-center justify-center transition-colors cursor-pointer ${isPinned ? 'text-zinc-200 bg-white/10' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
                                             }`}
                                         style={{ width: `${BTN_SIZE}px`, height: `${BTN_SIZE}px` }}
@@ -849,7 +858,7 @@ const Island = () => {
                                         <Power size={14} />
                                     </motion.button>
 
-                                    {/* Divider */}
+                                {/* Divider */}
                                     <div className="w-px h-3 bg-white/5" />
 
                                     {/* Recenter */}
@@ -864,31 +873,31 @@ const Island = () => {
                                     >
                                         <LocateFixed size={14} className="text-zinc-500 group-hover:text-white" />
                                     </motion.button>
-                                </div>
                             </div>
+                        </div>
                         </motion.div>
 
                         {/* B) Center Content */}
-                        <div 
-                            className="flex-1 w-full min-w-0 flex flex-col items-center justify-center"
-                            style={{ paddingLeft: 0, paddingRight: 0 }}
+                        <div
+                            className="flex-1 flex flex-col items-stretch"
+                            style={{ minHeight: 0 }}
                         >
-                            {/* Mode Toggle */}
-                            {state === 'idle' && (
+                        {/* Mode Toggle */}
+                        {state === 'idle' && (
                                 <div
                                     className="w-full min-w-0 grid grid-cols-3"
                                     style={{ gap: `${GAP_INLINE}px`, marginBottom: `${GAP_MODE_TIME}px` }}
                                 >
                                     {/* Countdown */}
                                     <motion.button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            setTimerMode('countdown');
-                                        }}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setTimerMode('countdown');
+                                    }}
                                         className={`min-w-0 w-full flex items-center justify-center gap-2 rounded-full px-3 py-2 text-[10px] font-black tracking-widest uppercase transition-all cursor-pointer ${timerMode === 'countdown'
                                             ? 'bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.16)]'
-                                            : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
-                                            }`}
+                                        : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
+                                        }`}
                                         whileHover={hoverLift}
                                         whileTap={pressTap}
                                         transition={{ duration: 0.12, ease: easeApple }}
@@ -899,14 +908,14 @@ const Island = () => {
 
                                     {/* Countup */}
                                     <motion.button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            setTimerMode('countup');
-                                        }}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setTimerMode('countup');
+                                    }}
                                         className={`min-w-0 w-full flex items-center justify-center gap-2 rounded-full px-3 py-2 text-[10px] font-black tracking-widest uppercase transition-all cursor-pointer ${timerMode === 'countup'
                                             ? 'bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.16)]'
-                                            : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
-                                            }`}
+                                        : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
+                                        }`}
                                         whileHover={hoverLift}
                                         whileTap={pressTap}
                                         transition={{ duration: 0.12, ease: easeApple }}
@@ -932,136 +941,141 @@ const Island = () => {
                                         <Flame size={14} strokeWidth={3} className="shrink-0" />
                                         <span className="truncate">Pomodoro</span>
                                     </motion.button>
-                                </div>
-                            )}
+                            </div>
+                        )}
 
-                            {/* Time Display / Inputs */}
+                            {/* Content area */}
+                            <div
+                                className="flex-1 w-full min-h-0"
+                                style={{ overflow: 'visible' }}
+                            >
+                                {/* Time Display / Inputs */}
                             {state === 'idle' ? (
-                                timerMode === 'pomodoro' ? (
-                                    <div className="flex flex-col items-center justify-center w-full" style={{ gap: `${GAP_STACK}px` }}>
-                                        {/* Settings */}
-                                        <div className="w-fit mx-auto grid grid-cols-[max-content_96px_max-content] gap-x-4 gap-y-4 items-center">
-                                            {/* Work */}
-                                            <label className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase text-right whitespace-nowrap">
-                                                Work
-                                            </label>
-                                            <input
-                                                type="number"
-                                                min="1"
-                                                max="99"
-                                                value={workMinutes}
-                                                onChange={(e) => {
-                                                    const val = Math.max(1, Math.min(99, parseInt(e.target.value) || 1));
-                                                    setWorkMinutes(val);
-                                                }}
-                                                className="w-[96px] bg-zinc-900 border border-white/10 rounded px-2 py-1.5 text-center text-white text-sm font-mono focus:outline-none focus:border-white/20"
-                                            />
-                                            <span className="text-[10px] text-zinc-600 whitespace-nowrap text-left">
-                                                min
-                                            </span>
-
-                                            {/* Short Break */}
-                                            <label className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase text-right whitespace-nowrap">
-                                                Short break
-                                            </label>
-                                            <input
-                                                type="number"
-                                                min="1"
-                                                max="60"
-                                                value={shortBreakMinutes}
-                                                onChange={(e) => {
-                                                    const val = Math.max(1, Math.min(60, parseInt(e.target.value) || 1));
-                                                    setShortBreakMinutes(val);
-                                                }}
-                                                className="w-[96px] bg-zinc-900 border border-white/10 rounded px-2 py-1.5 text-center text-white text-sm font-mono focus:outline-none focus:border-white/20"
-                                            />
-                                            <span className="text-[10px] text-zinc-600 whitespace-nowrap text-left">
-                                                min
-                                            </span>
-
-                                            {/* Long Break */}
-                                            <label className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase text-right whitespace-nowrap">
-                                                Long break
-                                            </label>
-                                            <input
-                                                type="number"
-                                                min="1"
-                                                max="60"
-                                                value={longBreakMinutes}
-                                                onChange={(e) => {
-                                                    const val = Math.max(1, Math.min(60, parseInt(e.target.value) || 1));
-                                                    setLongBreakMinutes(val);
-                                                }}
-                                                className="w-[96px] bg-zinc-900 border border-white/10 rounded px-2 py-1.5 text-center text-white text-sm font-mono focus:outline-none focus:border-white/20"
-                                            />
-                                            <span className="text-[10px] text-zinc-600 whitespace-nowrap text-left">
-                                                min
-                                            </span>
-
-                                            {/* Long Break Every */}
-                                            <label className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase text-right whitespace-nowrap">
-                                                Long break every
-                                            </label>
-                                            <input
-                                                type="number"
-                                                min="1"
-                                                max="10"
-                                                value={longBreakEvery}
-                                                onChange={(e) => {
-                                                    const val = Math.max(1, Math.min(10, parseInt(e.target.value) || 1));
-                                                    setLongBreakEvery(val);
-                                                }}
-                                                className="w-[96px] bg-zinc-900 border border-white/10 rounded px-2 py-1.5 text-center text-white text-sm font-mono focus:outline-none focus:border-white/20"
-                                            />
-                                            <span className="text-[10px] text-zinc-600 whitespace-nowrap text-left">
-                                                sessions
-                                            </span>
-
-                                            {/* Auto-start Next */}
-                                            <label className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase text-right whitespace-nowrap">
-                                                Auto-start next
-                                            </label>
-
-                                            {/* Keep your existing toggle button exactly, just placed in column 2 */}
-                                            <div className="justify-self-start">
-                                                <motion.button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        setAutoStartNext(!autoStartNext);
+                                    timerMode === 'pomodoro' ? (
+                                        <div className="flex flex-col items-center justify-start w-full pt-1" style={{ gap: `${GAP_STACK}px` }}>
+                                            {/* Settings */}
+                                            <div className="w-full max-w-[340px] mx-auto grid grid-cols-[1fr_110px_64px] gap-x-4 gap-y-4 items-center">
+                                                {/* Work */}
+                                                <label className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase text-right pr-1 whitespace-nowrap">
+                                                    Work
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    max="99"
+                                                    value={workMinutes}
+                                                    onChange={(e) => {
+                                                        const val = Math.max(1, Math.min(99, parseInt(e.target.value) || 1));
+                                                        setWorkMinutes(val);
                                                     }}
-                                                    className={`w-12 h-6 rounded-full transition-colors ${autoStartNext ? 'bg-cyan-400' : 'bg-zinc-800'}`}
-                                                    whileTap={pressTap}
-                                                >
-                                                    <motion.div
-                                                        className="w-5 h-5 bg-white rounded-full shadow-lg"
-                                                        animate={{ x: autoStartNext ? 26 : 2 }}
-                                                        transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-                                                    />
-                                                </motion.button>
-                                            </div>
+                                                    className="w-full bg-zinc-900 border border-white/10 rounded px-2 py-1.5 text-center text-white text-sm font-mono focus:outline-none focus:border-white/20"
+                                                />
+                                                <span className="text-[10px] text-zinc-600 whitespace-nowrap text-left pl-1">
+                                                    min
+                                                </span>
 
-                                            {/* Blank unit cell to keep the 3rd column aligned */}
-                                            <span />
-                                        </div>
-                                        
-                                        {/* Current Phase Display */}
-                                        <div className="flex flex-col items-center" style={{ gap: `${GAP_INLINE}px`, marginTop: `${GAP_STACK}px` }}>
-                                            <span className="text-7xl font-mono font-black text-white tracking-tighter tabular-nums">
-                                                {formatTime(timeLeft)}
-                                            </span>
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-[10px] font-black tracking-[0.3em] text-zinc-600 uppercase">
-                                                    {pomodoroPhase === 'work' ? 'Work' : pomodoroPhase === 'short_break' ? 'Break' : 'Long Break'}
+                                                {/* Short Break */}
+                                                <label className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase text-right pr-1 whitespace-nowrap">
+                                                    Short break
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    max="60"
+                                                    value={shortBreakMinutes}
+                                                    onChange={(e) => {
+                                                        const val = Math.max(1, Math.min(60, parseInt(e.target.value) || 1));
+                                                        setShortBreakMinutes(val);
+                                                    }}
+                                                    className="w-full bg-zinc-900 border border-white/10 rounded px-2 py-1.5 text-center text-white text-sm font-mono focus:outline-none focus:border-white/20"
+                                                />
+                                                <span className="text-[10px] text-zinc-600 whitespace-nowrap text-left pl-1">
+                                                    min
                                                 </span>
-                                                <span className="text-[10px] text-zinc-600">•</span>
-                                                <span className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase">
-                                                    Session {pomodoroSessionCount + 1} / {longBreakEvery}
+
+                                                {/* Long Break */}
+                                                <label className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase text-right pr-1 whitespace-nowrap">
+                                                    Long break
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    max="60"
+                                                    value={longBreakMinutes}
+                                                    onChange={(e) => {
+                                                        const val = Math.max(1, Math.min(60, parseInt(e.target.value) || 1));
+                                                        setLongBreakMinutes(val);
+                                                    }}
+                                                    className="w-full bg-zinc-900 border border-white/10 rounded px-2 py-1.5 text-center text-white text-sm font-mono focus:outline-none focus:border-white/20"
+                                                />
+                                                <span className="text-[10px] text-zinc-600 whitespace-nowrap text-left pl-1">
+                                                    min
                                                 </span>
+
+                                                {/* Long Break Every */}
+                                                <label className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase text-right pr-1 whitespace-nowrap">
+                                                    Long break every
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    max="10"
+                                                    value={longBreakEvery}
+                                                    onChange={(e) => {
+                                                        const val = Math.max(1, Math.min(10, parseInt(e.target.value) || 1));
+                                                        setLongBreakEvery(val);
+                                                    }}
+                                                    className="w-full bg-zinc-900 border border-white/10 rounded px-2 py-1.5 text-center text-white text-sm font-mono focus:outline-none focus:border-white/20"
+                                                />
+                                                <span className="text-[10px] text-zinc-600 whitespace-nowrap text-left pl-1">
+                                                    sessions
+                                                </span>
+
+                                                {/* Auto-start Next */}
+                                                <label className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase text-right pr-1 whitespace-nowrap">
+                                                    Auto-start next
+                                                </label>
+
+                                                {/* keep existing toggle logic unchanged, just place it in column 2 */}
+                                                <div className="justify-self-start">
+                                                    <motion.button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setAutoStartNext(!autoStartNext);
+                                                        }}
+                                                        className={`w-12 h-6 rounded-full transition-colors ${autoStartNext ? 'bg-cyan-400' : 'bg-zinc-800'}`}
+                                                        whileTap={pressTap}
+                                                    >
+                                                        <motion.div
+                                                            className="w-5 h-5 bg-white rounded-full shadow-lg"
+                                                            animate={{ x: autoStartNext ? 26 : 2 }}
+                                                            transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                                                        />
+                                                    </motion.button>
+                                                </div>
+
+                                                {/* empty unit cell to preserve grid */}
+                                                <span />
+                                            </div>
+                                            
+                                            {/* Current Phase Display */}
+                                            <div className="flex flex-col items-center" style={{ gap: `${GAP_INLINE}px`, marginTop: `10px` }}>
+                                                <span className="text-7xl font-mono font-black text-white tracking-tighter tabular-nums">
+                                                    {formatTime(timeLeft)}
+                                                </span>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-[10px] font-black tracking-[0.3em] text-zinc-600 uppercase">
+                                                        {pomodoroPhase === 'work' ? 'Work' : pomodoroPhase === 'short_break' ? 'Break' : 'Long Break'}
+                                                    </span>
+                                                    <span className="text-[10px] text-zinc-600">•</span>
+                                                    <span className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase">
+                                                        Session {pomodoroSessionCount + 1} / {longBreakEvery}
+                                                    </span>
+                                                </div>
                                             </div>
                                         </div>
-                                    </div>
-                                ) : timerMode === 'countdown' ? (
-                                    <div className="flex flex-col items-center justify-center w-full">
+                                    ) : timerMode === 'countdown' ? (
+                                        <div className="flex flex-col items-center justify-center w-full">
                                         {/* Digit Row */}
                                         <div className="flex items-center justify-center">
                                             <div className="w-24 flex justify-center">
@@ -1107,50 +1121,52 @@ const Island = () => {
                                         </div>
                                     </div>
                                 ) : (
-                                    <div className="flex flex-col items-center" style={{ gap: `${GAP_INLINE * 2}px` }}>
+                                        <div className="flex flex-col items-center" style={{ gap: `${GAP_INLINE * 2}px` }}>
                                         <span className="text-7xl font-mono font-black text-white/20 tracking-tighter tabular-nums">00:00</span>
                                         <span className="text-[10px] font-black tracking-[0.3em] text-zinc-600 uppercase">Ready</span>
                                     </div>
                                 )
                             ) : (
-                                <div className="flex flex-col items-center" style={{ gap: `${GAP_INLINE * 2}px` }}>
-                                    <motion.div
-                                        className={`text-8xl font-mono font-black tracking-tighter tabular-nums antialiased transition-[color,filter] duration-200 ease-out ${state === 'running' ? 'text-cyan-400' :
-                                            state === 'paused' ? 'text-yellow-400' :
-                                                state === 'finished' ? 'text-red-500' : 'text-white'
-                                            }`}
-                                        animate={{
-                                            filter: state === 'running'
-                                                ? 'drop-shadow(0 0 15px rgba(34, 211, 238, 0.4))'
-                                                : state === 'paused'
-                                                    ? 'drop-shadow(0 0 10px rgba(250, 204, 21, 0.2))'
-                                                    : state === 'finished'
-                                                        ? 'drop-shadow(0 0 10px rgba(239, 68, 68, 0.3))'
-                                                        : 'none'
-                                        }}
-                                        transition={fadeMed}
-                                    >
-                                        {formatTime(timeLeft)}
-                                    </motion.div>
-                                    {timerMode === 'pomodoro' && (
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-[10px] font-black tracking-[0.3em] text-zinc-600 uppercase">
-                                                {pomodoroPhase === 'work' ? 'Work' : pomodoroPhase === 'short_break' ? 'Break' : 'Long Break'}
-                                            </span>
-                                            <span className="text-[10px] text-zinc-600">•</span>
-                                            <span className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase">
-                                                Session {pomodoroSessionCount + 1} / {longBreakEvery}
-                                            </span>
-                                        </div>
-                                    )}
+                                    <div className="flex flex-col items-center" style={{ gap: `${GAP_INLINE * 2}px` }}>
+                                        <motion.div
+                                            className={`text-8xl font-mono font-black tracking-tighter tabular-nums antialiased transition-[color,filter] duration-200 ease-out ${state === 'running' ? 'text-cyan-400' :
+                                        state === 'paused' ? 'text-yellow-400' :
+                                            state === 'finished' ? 'text-red-500' : 'text-white'
+                                        }`}
+                                            animate={{
+                                        filter: state === 'running'
+                                            ? 'drop-shadow(0 0 15px rgba(34, 211, 238, 0.4))'
+                                            : state === 'paused'
+                                                ? 'drop-shadow(0 0 10px rgba(250, 204, 21, 0.2))'
+                                                        : state === 'finished'
+                                                            ? 'drop-shadow(0 0 10px rgba(239, 68, 68, 0.3))'
+                                                : 'none'
+                                    }}
+                                            transition={fadeMed}
+                                >
+                                    {formatTime(timeLeft)}
+                                        </motion.div>
+                                        {timerMode === 'pomodoro' && (
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-[10px] font-black tracking-[0.3em] text-zinc-600 uppercase">
+                                                    {pomodoroPhase === 'work' ? 'Work' : pomodoroPhase === 'short_break' ? 'Break' : 'Long Break'}
+                                                </span>
+                                                <span className="text-[10px] text-zinc-600">•</span>
+                                                <span className="text-[10px] font-black tracking-[0.2em] text-zinc-600 uppercase">
+                                                    Session {pomodoroSessionCount + 1} / {longBreakEvery}
+                                                </span>
                                 </div>
                             )}
+                                    </div>
+                                )}
+                            </div>
                         </div>
 
                         {/* C) Bottom Controls */}
+                        <div className="shrink-0">
                         <div 
                             className="flex items-center justify-center"
-                            style={{ gap: `${GAP_CONTROLS}px`, marginTop: `${GAP_STACK}px` }}
+                            style={{ gap: `${GAP_CONTROLS}px`, marginTop: `${(timerMode === 'pomodoro' && state === 'idle') ? 10 : GAP_STACK}px` }}
                         >
                             <motion.button
                                 onClick={stopTimer}
@@ -1185,6 +1201,7 @@ const Island = () => {
                                     <Play size={24} fill="currentColor" strokeWidth={0} className="ml-1" />
                                 </motion.button>
                             )}
+                        </div>
                         </div>
                     </motion.div>
                 ) : (
@@ -1258,7 +1275,7 @@ const Island = () => {
                     </motion.div>
                 )}
             </AnimatePresence>
-                </motion.div>
+        </motion.div>
             </motion.div>
         </div>
     );
