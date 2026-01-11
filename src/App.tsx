@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, useMotionValue, useTransform, animate } from 'framer-motion';
 import { Play, Pause, RefreshCw, Timer, Clock, Pin, PinOff, LocateFixed, Power, Flame, Coffee } from 'lucide-react';
 import { springApple, viewFade, easeApple, pressTap, hoverLift, fadeMed } from './motion';
 
@@ -163,8 +163,8 @@ const Island = () => {
 
     // Dismissal state for smooth collapse transition
     const [isDismissing, setIsDismissing] = useState(false);
-    const DISMISS_CHROME_MS = 90;
-    const DISMISS_SHRINK_DELAY_MS = 60;
+    const DISMISS_CHROME_MS = 65;
+    const DISMISS_SHRINK_DELAY_MS = 35;
 
     // Finish animation trigger state
     const [finishFxKey, setFinishFxKey] = useState(0);
@@ -520,12 +520,17 @@ const Island = () => {
         return () => window.clearTimeout(t);
     }, [finishFxKey]);
 
-    // Compute current island size using isSizeExpanded (keeps size expanded during exit animation)
-    const islandW = isSizeExpanded
-        ? ISLAND_W_EXPANDED
-        : (state === 'running' || state === 'paused' || state === 'finished')
-            ? ISLAND_W_ACTIVE
-            : ISLAND_W_IDLE;
+    // Shared morph progress: 1=expanded, 0=collapsed
+    const morphT = useMotionValue(isSizeExpanded ? 1 : 0);
+
+    useEffect(() => {
+        // Faster spring for collapse, keep current for expansion
+        const springConfig = isSizeExpanded 
+            ? springApple 
+            : { type: "spring" as const, stiffness: 680, damping: 45, mass: 0.85 };
+        const controls = animate(morphT, isSizeExpanded ? 1 : 0, springConfig);
+        return () => controls.stop();
+    }, [isSizeExpanded, morphT]);
 
     // Compute expanded height based on mode and state
     const expandedH =
@@ -533,7 +538,22 @@ const Island = () => {
             ? (state === 'idle' ? EXPANDED_H_POMO_IDLE : EXPANDED_H_POMO_ACTIVE)
             : EXPANDED_H_DEFAULT;
 
-    const islandH = isSizeExpanded ? expandedH : ISLAND_H_COLLAPSED;
+    // Compute collapsed dimensions
+    const collapsedW = (state === 'running' || state === 'paused' || state === 'finished')
+        ? ISLAND_W_ACTIVE
+        : ISLAND_W_IDLE;
+    const collapsedH = ISLAND_H_COLLAPSED;
+
+    // Transform motion values from shared progress
+    const wMv = useTransform(morphT, [0, 1], [collapsedW, ISLAND_W_EXPANDED]);
+    const hMv = useTransform(morphT, [0, 1], [collapsedH, expandedH]);
+    const rMv = useTransform(morphT, [0, 1], [COLLAPSED_RADIUS, 48]);
+
+    // For interactive rect computation (uses final target values)
+    const islandW = isSizeExpanded
+        ? ISLAND_W_EXPANDED
+        : collapsedW;
+    const islandH = isSizeExpanded ? expandedH : collapsedH;
 
     const pad = isSizeExpanded ? PAD_EXPANDED : PAD_COLLAPSED;
 
@@ -548,25 +568,50 @@ const Island = () => {
         height: islandH,
     }), [pad, winW, islandW, islandH]);
 
-    // Window resize: throttled + deduplicated for smooth performance
+    // Window resize: sync with animated motion values for smooth morph
     const lastSizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
+    const animationFrameRef = useRef<number | null>(null);
+    const isAnimatingRef = useRef(false);
 
     useEffect(() => {
         if (!window.electron?.resizeWindow) return;
 
-        const w = winW;
-        const h = winH;
-        
-        // Dedupe: only call when size actually changed
-        if (lastSizeRef.current.w === w && lastSizeRef.current.h === h) return;
-        lastSizeRef.current = { w, h };
+        isAnimatingRef.current = true;
+        const targetW = isSizeExpanded ? ISLAND_W_EXPANDED : collapsedW;
+        const targetH = isSizeExpanded ? expandedH : collapsedH;
 
-        // Throttle via requestAnimationFrame
-        const id = requestAnimationFrame(() => {
-            window.electron?.resizeWindow(w, h);
-        });
-        return () => cancelAnimationFrame(id);
-    }, [winW, winH]);
+        const updateWindowSize = () => {
+            const currentW = wMv.get();
+            const currentH = hMv.get();
+            const pad = isSizeExpanded ? PAD_EXPANDED : PAD_COLLAPSED;
+            const w = Math.round(currentW + pad * 2);
+            const h = Math.round(currentH + pad * 2);
+
+            // Dedupe: only call when size actually changed
+            if (lastSizeRef.current.w !== w || lastSizeRef.current.h !== h) {
+                lastSizeRef.current = { w, h };
+                window.electron.resizeWindow(w, h);
+            }
+
+            // Check if animation is complete (within 1px of target)
+            const wDiff = Math.abs(currentW - targetW);
+            const hDiff = Math.abs(currentH - targetH);
+            if (wDiff < 1 && hDiff < 1) {
+                isAnimatingRef.current = false;
+                return;
+            }
+
+            animationFrameRef.current = requestAnimationFrame(updateWindowSize);
+        };
+
+        animationFrameRef.current = requestAnimationFrame(updateWindowSize);
+        return () => {
+            if (animationFrameRef.current !== null) {
+                cancelAnimationFrame(animationFrameRef.current);
+            }
+            isAnimatingRef.current = false;
+        };
+    }, [wMv, hMv, isSizeExpanded, collapsedW, expandedH]);
 
     // Report overlay mode to main process
     useEffect(() => {
@@ -726,15 +771,11 @@ const Island = () => {
             {/* Outer wrapper for FinishRing (non-overflow so ring doesn't clip) */}
         <motion.div
                 className="relative"
-                style={{ width: islandW, height: islandH }}
+                style={{ width: wMv, height: hMv }}
                 animate={{
-                    width: islandW,
-                    height: islandH,
                     scale: shouldFinishFx && finishFxKey > 0 ? [1, FINISH_POP_SCALE, 1] : 1,
                 }}
                 transition={{
-                    width: springApple,
-                    height: springApple,
                     scale: shouldFinishFx ? { duration: FINISH_POP_DURATION, ease: easePremium } : { duration: 0.08 },
                 }}
             >
@@ -750,6 +791,7 @@ const Island = () => {
                         height: '100%',
                 background: 'rgba(0, 0, 0, 1)',
                         transformOrigin: '50% 50%',
+                        borderRadius: rMv,
                         boxShadow: isSizeExpanded
                             ? '0 12px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05)'
                             : 'none' // no shadow/glow in collapsed mode
@@ -757,12 +799,6 @@ const Island = () => {
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}
             initial={false}
-            animate={{
-                        borderRadius: isSizeExpanded ? 48 : COLLAPSED_RADIUS,
-                    }}
-                    transition={{
-                        borderRadius: springApple,
-                    }}
                     onPointerDown={onPointerDown}
                     onPointerMove={onPointerMove}
                     onPointerUp={endPointerDrag}
