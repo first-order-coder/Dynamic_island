@@ -4,6 +4,11 @@
   "version": "0.1.0",
   "description": "A beautiful timer app with dynamic island UI",
   "author": "Island Timer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/first-order-coder/Dynamic_island.git"
+  },
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "cross-env DEV_PORT=5174 concurrently \"npm run dev:react\" \"npm run dev:electron\"",
