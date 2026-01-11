@@ -172,7 +172,8 @@ const createWindow = () => {
         mainWindow.loadURL(devUrl);
         // mainWindow.webContents.openDevTools({ mode: 'detach' });
     } else {
-        mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+        // Production: load from app path (works correctly with electron-builder packaging)
+        mainWindow.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'));
     }
 
     // Bridge logs from renderer to terminal

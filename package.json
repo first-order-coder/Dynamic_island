@@ -2,12 +2,18 @@
   "name": "island-timer",
   "private": true,
   "version": "0.1.0",
+  "description": "A beautiful timer app with dynamic island UI",
+  "author": "Island Timer",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "cross-env DEV_PORT=5174 concurrently \"npm run dev:react\" \"npm run dev:electron\"",
     "dev:react": "vite",
     "dev:electron": "cross-env node wait-port.js && tsc -p electron/tsconfig.json && electron .",
-    "build": "tsc && vite build && tsc -p electron/tsconfig.json",
+    "build": "npm run build:react && npm run build:electron",
+    "build:react": "vite build",
+    "build:electron": "tsc -p electron/tsconfig.json",
+    "clean:eb-cache": "powershell -NoProfile -Command \"Remove-Item -Recurse -Force $env:LOCALAPPDATA\\electron-builder\\Cache\\winCodeSign -ErrorAction SilentlyContinue\"",
+    "dist:win": "npm run build && npm run clean:eb-cache && electron-builder --win --x64",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -26,10 +32,40 @@
     "concurrently": "^8.2.2",
     "cross-env": "^7.0.3",
     "electron": "^28.2.1",
+    "electron-builder": "^26.4.0",
     "postcss": "^8.4.33",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.3.3",
     "vite": "^5.0.12",
     "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.islandtimer.app",
+    "productName": "Island Timer",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false
+    }
   }
 }
