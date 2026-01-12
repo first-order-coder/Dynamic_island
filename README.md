@@ -1,7 +1,5 @@
 # Island Timer
 
-![Project screenshot](assets/screenshot.png)
-
 <p align="center">
   <img src="assets/screenshot.png" alt="Project screenshot" width="900" />
 </p>
