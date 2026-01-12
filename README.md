@@ -1,5 +1,11 @@
 # Island Timer
 
+![Project screenshot](assets/screenshot.png)
+
+<p align="center">
+  <img src="assets/screenshot.png" alt="Project screenshot" width="900" />
+</p>
+
 A beautiful Dynamic Island-style timer overlay for Windows, built with Electron, React, Tailwind CSS, and Framer Motion.
 ![Alt text]([docs/images/logo.png](https://github.com/first-order-coder/30_day_Python/blob/main/Red%20and%20Yellow%20Bold%20Portrait%20Album%20Cover.png))
 ## Features
