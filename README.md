@@ -76,46 +76,6 @@ The installer will be created in the `release/` directory.
 
 **Note:** If you encounter a symlink error on Windows, see [docs/WINDOWS_BUILD_FIX.md](docs/WINDOWS_BUILD_FIX.md).
 
-## Release Steps
-
-To create a new release:
-
-1. **Update version** in `package.json`
-2. **Build the installer:**
-   ```bash
-   npm run dist:win
-   ```
-3. **Test the installer** on a clean Windows machine (optional but recommended)
-4. **Create a GitHub Release:**
-   - Go to the Releases page on GitHub
-   - Click "Draft a new release"
-   - Tag: `v0.1.0` (match the version in package.json)
-   - Title: `v0.1.0` or a descriptive name
-   - Description: List changes/features
-   - Attach: `release/Island Timer Setup X.X.X.exe`
-5. **Publish the release**
-
-## Project Structure
-
-```
-.
-├── electron/          # Electron main process and preload
-├── src/              # React application source
-├── dist/             # Built React app (generated)
-├── dist-electron/    # Built Electron files (generated)
-├── release/          # Build outputs and installers (generated)
-└── docs/             # Documentation
-```
-
-## Technologies
-
-- **Electron**: Cross-platform desktop app framework
-- **React**: UI library
-- **Vite**: Build tool and dev server
-- **Tailwind CSS**: Utility-first CSS framework
-- **Framer Motion**: Animation library
-- **TypeScript**: Type safety
-
 ## License
 
 MIT License - see [LICENSE](LICENSE) file for details.
