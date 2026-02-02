@@ -1,13 +1,15 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence, useMotionValue, useTransform, animate } from 'framer-motion';
-import { Play, Pause, RefreshCw, Timer, Clock, Pin, PinOff, LocateFixed, Power, Flame, Coffee } from 'lucide-react';
+import { Play, Pause, RefreshCw, Timer, Clock, Pin, PinOff, LocateFixed, Power, Flame, Coffee, Calendar } from 'lucide-react';
 import { springApple, viewFade, easeApple, pressTap, hoverLift, fadeMed } from './motion';
+import { ActivityHeatmap } from './views/ActivityHeatmap';
+import { bumpActivity, getTodayISO } from './activityStore';
 
 // DEBUG mode - set to false to remove red window outline
 const DEBUG = false;
 
 type TimerState = 'idle' | 'running' | 'paused' | 'finished';
-type TimerMode = 'countdown' | 'countup' | 'pomodoro';
+type TimerMode = 'countdown' | 'countup' | 'pomodoro' | 'activity';
 type PomodoroPhase = 'work' | 'short_break' | 'long_break';
 
 // Finish animation constants (single source of truth)
@@ -141,7 +143,24 @@ const Island = () => {
     const [isSizeExpanded, setIsSizeExpanded] = useState(false); // Controls container/window size (stays expanded during exit)
     const [state, setState] = useState<TimerState>('idle');
     const [timeLeft, setTimeLeft] = useState(15 * 60);
-    const [timerMode, setTimerMode] = useState<TimerMode>('countdown');
+    
+    // Load mode from localStorage or default to 'countdown'
+    const [timerMode, setTimerMode] = useState<TimerMode>(() => {
+        try {
+            const stored = localStorage.getItem('islandTimer.selectedMode');
+            if (stored && ['countdown', 'countup', 'pomodoro', 'activity'].includes(stored)) {
+                return stored as TimerMode;
+            }
+        } catch {}
+        return 'countdown';
+    });
+
+    // Persist mode to localStorage
+    useEffect(() => {
+        try {
+            localStorage.setItem('islandTimer.selectedMode', timerMode);
+        } catch {}
+    }, [timerMode]);
 
     const [inputMinutes, setInputMinutes] = useState(15);
     const [inputSeconds, setInputSeconds] = useState(0);
@@ -392,7 +411,13 @@ const Island = () => {
                         if (timerMode === 'pomodoro') {
                             // Advance Pomodoro phase
                             const wasAutoStart = autoStartNext;
+                            const wasWorkPhase = pomodoroPhaseRef.current === 'work';
                             advancePomodoroPhase(now);
+                            
+                            // Track activity only when work phase completes (not breaks)
+                            if (wasWorkPhase) {
+                                bumpActivity(getTodayISO(), 1);
+                            }
                             
                             // If autoStartNext is false, pause and clear interval
                             if (!wasAutoStart) {
@@ -406,6 +431,8 @@ const Island = () => {
                             setState('finished');
                             // DO NOT auto-expand on finish - keep current expanded state
                             setTimeLeft(0);
+                            // Track activity
+                            bumpActivity(getTodayISO(), 1);
                         }
                     }
                     } else {
@@ -534,7 +561,9 @@ const Island = () => {
 
     // Compute expanded height based on mode and state
     const expandedH =
-        timerMode === 'pomodoro'
+        timerMode === 'activity'
+            ? 600 // Increased height for activity heatmap to accommodate larger cells
+            : timerMode === 'pomodoro'
             ? (state === 'idle' ? EXPANDED_H_POMO_IDLE : EXPANDED_H_POMO_ACTIVE)
             : EXPANDED_H_DEFAULT;
 
@@ -919,9 +948,9 @@ const Island = () => {
                             style={{ minHeight: 0 }}
                         >
                         {/* Mode Toggle */}
-                        {state === 'idle' && (
+                        {(state === 'idle' || timerMode === 'activity') && (
                                 <div
-                                    className="w-full min-w-0 grid grid-cols-3"
+                                    className="w-full min-w-0 grid grid-cols-4"
                                     style={{ gap: `${GAP_INLINE}px`, marginBottom: `${GAP_MODE_TIME}px` }}
                                 >
                                     {/* Countdown */}
@@ -937,6 +966,12 @@ const Island = () => {
                                         whileHover={hoverLift}
                                         whileTap={pressTap}
                                         transition={{ duration: 0.12, ease: easeApple }}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                e.preventDefault();
+                                                setTimerMode('countdown');
+                                            }
+                                        }}
                                     >
                                         <Timer size={14} strokeWidth={3} className="shrink-0" />
                                         <span className="truncate">Timer</span>
@@ -955,6 +990,12 @@ const Island = () => {
                                         whileHover={hoverLift}
                                         whileTap={pressTap}
                                         transition={{ duration: 0.12, ease: easeApple }}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                e.preventDefault();
+                                                setTimerMode('countup');
+                                            }
+                                        }}
                                     >
                                         <Clock size={14} strokeWidth={3} className="shrink-0" />
                                         <span className="truncate">Stopwatch</span>
@@ -973,9 +1014,39 @@ const Island = () => {
                                         whileHover={hoverLift}
                                         whileTap={pressTap}
                                         transition={{ duration: 0.12, ease: easeApple }}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                e.preventDefault();
+                                                setTimerMode('pomodoro');
+                                            }
+                                        }}
                                     >
                                         <Flame size={14} strokeWidth={3} className="shrink-0" />
                                         <span className="truncate">Pomodoro</span>
+                                    </motion.button>
+
+                                    {/* Activity */}
+                                    <motion.button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setTimerMode('activity');
+                                        }}
+                                        className={`min-w-0 w-full flex items-center justify-center gap-2 rounded-full px-3 py-2 text-[10px] font-black tracking-widest uppercase transition-all cursor-pointer ${timerMode === 'activity'
+                                            ? 'bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.16)]'
+                                            : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
+                                            }`}
+                                        whileHover={hoverLift}
+                                        whileTap={pressTap}
+                                        transition={{ duration: 0.12, ease: easeApple }}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                e.preventDefault();
+                                                setTimerMode('activity');
+                                            }
+                                        }}
+                                    >
+                                        <Calendar size={14} strokeWidth={3} className="shrink-0" />
+                                        <span className="truncate">Activity</span>
                                     </motion.button>
                             </div>
                         )}
@@ -986,7 +1057,9 @@ const Island = () => {
                                 style={{ overflow: 'visible' }}
                             >
                                 {/* Time Display / Inputs */}
-                            {state === 'idle' ? (
+                            {timerMode === 'activity' ? (
+                                    <ActivityHeatmap />
+                                ) : state === 'idle' ? (
                                     timerMode === 'pomodoro' ? (
                                         <div className="flex flex-col items-center justify-start w-full pt-1" style={{ gap: `${GAP_STACK}px` }}>
                                             {/* Settings */}
@@ -1199,6 +1272,7 @@ const Island = () => {
                         </div>
 
                         {/* C) Bottom Controls */}
+                        {timerMode !== 'activity' && (
                         <div className="shrink-0">
                         <div 
                             className="flex items-center justify-center"
@@ -1239,6 +1313,7 @@ const Island = () => {
                             )}
                         </div>
                         </div>
+                        )}
                     </motion.div>
                 ) : (
                     <motion.div
@@ -1249,10 +1324,10 @@ const Island = () => {
                         animate="animate"
                         exit="exit"
                     >
-                        {state === 'idle' && (
+                                {state === 'idle' && (
                             <div className="w-full flex justify-center">
                                 <span className="text-[11px] font-bold tracking-widest text-zinc-500 uppercase">
-                                    {timerMode === 'countdown' ? 'Set Timer' : timerMode === 'countup' ? 'Stopwatch' : 'Pomodoro'}
+                                    {timerMode === 'countdown' ? 'Set Timer' : timerMode === 'countup' ? 'Stopwatch' : timerMode === 'pomodoro' ? 'Pomodoro' : 'Activity'}
                                 </span>
                             </div>
                         )}
